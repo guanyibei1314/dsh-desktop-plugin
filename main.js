@@ -2,17 +2,21 @@
 /**
  * DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端。
  *
- * 原生窗口加载运行中的 DSH Web 客户端（默认 http://127.0.0.1:3080），
- * 并叠加桌面集成：
- *   - 原生菜单（主题切换 / 会话列表 / 视图缩放 / 设置文档 / 关于）
- *   - 托盘图标（会话运行状态，点击显示窗口；快速发消息）
- *   - 回合完成 / 代理错误系统通知（订阅 /api/events.host SSE）
+ * 零配置：原生窗口加载运行中的 DSH Web 客户端（默认 http://127.0.0.1:3080），
+ * 无需任何用户配置。打包一条命令：npm run dist（镜像已内置）。
+ *
+ * 桌面集成：
+ *   - 原生菜单（会话列表 / 主题 / 选项 / 视图 / 帮助）
+ *   - 托盘图标（运行状态 + 快速发消息）
+ *   - 回合完成 / 代理错误系统通知（点击聚焦窗口；可开关）
  *   - 会话运行中阻止系统休眠；任务完成时窗口闪烁
+ *   - 窗口位置/大小记忆；开机自启；全局快捷键 Ctrl+Alt+D
  *   - 关窗隐藏到托盘；服务未启动时显示重试页
  *
- * 服务地址可用环境变量 DSH_URL 或命令行 --url= 覆盖。
+ * 高级选项（可选，非必需）：环境变量 DSH_URL 或命令行 --url= 覆盖服务地址。
  */
-const { app, BrowserWindow, Menu, Tray, nativeImage, Notification, dialog, shell, ipcMain, clipboard, powerSaveBlocker } = require('electron')
+const { app, BrowserWindow, Menu, Tray, nativeImage, Notification, dialog, shell, ipcMain, clipboard, powerSaveBlocker, globalShortcut, screen } = require('electron')
+const fs = require('fs')
 const path = require('path')
 
 const ARG_URL = (() => {
@@ -33,11 +37,77 @@ let tray = null
 let quitting = false
 let connected = false
 let themePref = 'system'
+let notificationsEnabled = true
+let launchAtLogin = false
+let shortcutEnabled = true
 let sseTimer = null
 let menuRebuildTimer = null
 let powerBlockerId = null
 const lastNotifyAt = new Map() // sessionId -> timestamp (debounce)
 const sessionCache = new Map() // sessionId -> { cwd, running, blank, updatedAt }
+
+// ---------------------------------------------------------------- local settings (zero-config: all optional, defaults work out of the box)
+function settingsFile() {
+  return path.join(app.getPath('userData'), 'settings.json')
+}
+
+function loadSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))
+  } catch (err) {
+    return {}
+  }
+}
+
+function saveSettings(patch) {
+  try {
+    const next = Object.assign(loadSettings(), patch)
+    fs.writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
+  } catch (err) {
+    // settings persistence is best-effort
+  }
+}
+
+function applySettings() {
+  const s = loadSettings()
+  if (typeof s.notificationsEnabled === 'boolean') notificationsEnabled = s.notificationsEnabled
+  if (typeof s.launchAtLogin === 'boolean') launchAtLogin = s.launchAtLogin
+  if (typeof s.shortcutEnabled === 'boolean') shortcutEnabled = s.shortcutEnabled
+  if (s.themePref && typeof s.themePref === 'string') themePref = s.themePref
+  if (launchAtLogin) app.setLoginItemSettings({ openAtLogin: true })
+  applyShortcut()
+}
+
+function applyShortcut() {
+  if (SMOKE) return
+  if (shortcutEnabled) {
+    try {
+      if (!globalShortcut.isRegistered('CommandOrControl+Alt+D')) {
+        globalShortcut.register('CommandOrControl+Alt+D', () => {
+          if (win === null || win.isDestroyed()) showWindow()
+          else if (win.isFocused()) win.hide()
+          else showWindow()
+        })
+      }
+    } catch (err) {
+      // shortcut registration failed — ignore
+    }
+  } else if (globalShortcut.isRegistered('CommandOrControl+Alt+D')) {
+    globalShortcut.unregister('CommandOrControl+Alt+D')
+  }
+}
+
+function rememberedBounds() {
+  const s = loadSettings()
+  if (!s.windowBounds) return null
+  const b = s.windowBounds
+  if (typeof b.x !== 'number' || typeof b.y !== 'number' || typeof b.width !== 'number' || typeof b.height !== 'number') return null
+  const onScreen = screen.getAllDisplays().some((d) => {
+    const area = d.workArea
+    return b.x < area.x + area.width && b.x + b.width > area.x && b.y < area.y + area.height && b.y + b.height > area.y
+  })
+  return onScreen ? b : null
+}
 
 // ---------------------------------------------------------------- RPC
 async function rpc(method, payload = {}) {
@@ -128,16 +198,18 @@ function updateTray() {
 }
 
 function notifyTurnDone(sessionId, cwd) {
-  if (!Notification.isSupported()) return
+  if (!notificationsEnabled || !Notification.isSupported()) return
   const now = Date.now()
   const last = lastNotifyAt.get(sessionId) || 0
   if (now - last < 10000) return
   lastNotifyAt.set(sessionId, now)
   const base = cwd ? cwd.split(/[\\/]/).filter(Boolean).pop() : ''
-  new Notification({
+  const n = new Notification({
     title: 'DSH · 任务完成',
     body: '会话 ' + String(sessionId).slice(0, 8) + (base ? '（' + base + '）' : '') + ' 已结束运行',
-  }).show()
+  })
+  n.on('click', () => showWindow())
+  n.show()
   if (win !== null && !win.isDestroyed() && !win.isFocused()) {
     win.flashFrame(true)
   }
@@ -209,11 +281,13 @@ function handleFrame(frame) {
       break
     }
     case 'host/agent-error': {
-      if (Notification.isSupported()) {
-        new Notification({
+      if (notificationsEnabled && Notification.isSupported()) {
+        const n = new Notification({
           title: 'DSH · 代理出错',
           body: String(payload.message || '未知错误').slice(0, 240),
-        }).show()
+        })
+        n.on('click', () => showWindow())
+        n.show()
       }
       break
     }
@@ -227,6 +301,7 @@ async function setTheme(pref) {
   try {
     await rpc('settings.update', { ns: 'ui-theme', patch: { preference: pref } })
     themePref = pref
+    saveSettings({ themePref })
     rebuildMenu()
   } catch (err) {
     dialog.showErrorBox('DSH Desktop', '主题切换失败：' + err.message)
@@ -240,6 +315,7 @@ async function loadThemePref() {
     const ns = namespaces.find((n) => n.ns === 'ui-theme')
     if (ns && ns.value && typeof ns.value.preference === 'string') {
       themePref = ns.value.preference
+      saveSettings({ themePref })
       rebuildMenu()
     }
   } catch (err) {
@@ -298,6 +374,50 @@ function themeItems() {
   ]
 }
 
+function optionItems() {
+  return [
+    {
+      label: '开机自启',
+      type: 'checkbox',
+      checked: launchAtLogin,
+      click: (item) => {
+        launchAtLogin = item.checked
+        saveSettings({ launchAtLogin })
+        app.setLoginItemSettings({ openAtLogin: launchAtLogin })
+      },
+    },
+    {
+      label: '完成通知',
+      type: 'checkbox',
+      checked: notificationsEnabled,
+      click: (item) => {
+        notificationsEnabled = item.checked
+        saveSettings({ notificationsEnabled })
+      },
+    },
+    {
+      label: '全局快捷键 Ctrl+Alt+D 显示/隐藏窗口',
+      type: 'checkbox',
+      checked: shortcutEnabled,
+      click: (item) => {
+        shortcutEnabled = item.checked
+        saveSettings({ shortcutEnabled })
+        applyShortcut()
+      },
+    },
+    { type: 'separator' },
+    {
+      label: '重置窗口布局',
+      click: () => {
+        saveSettings({ windowBounds: null })
+        if (win !== null && !win.isDestroyed()) {
+          win.setBounds({ x: 120, y: 80, width: 1320, height: 860 })
+        }
+      },
+    },
+  ]
+}
+
 function buildMenu() {
   const zoom = () => (win ? win.webContents.getZoomLevel() : 0)
   return Menu.buildFromTemplate([
@@ -311,6 +431,7 @@ function buildMenu() {
     },
     { label: '会话', submenu: sessionMenuItems() },
     { label: '主题', submenu: themeItems() },
+    { label: '选项', submenu: optionItems() },
     {
       label: '视图',
       submenu: [
@@ -346,7 +467,7 @@ function buildMenu() {
             type: 'info',
             title: '关于',
             message: 'DSH Desktop ' + app.getVersion(),
-            detail: 'DeepSeek Harness 桌面客户端\n连接：' + HARNESS_URL,
+            detail: 'DeepSeek Harness 桌面客户端\n连接：' + HARNESS_URL + '\n零配置，开箱即用',
           }),
         },
       ],
@@ -378,9 +499,8 @@ function showWindow() {
 }
 
 function createWindow() {
-  win = new BrowserWindow({
-    width: 1320,
-    height: 860,
+  const bounds = rememberedBounds()
+  const winOptions = {
     minWidth: 960,
     minHeight: 600,
     title: 'DSH Desktop',
@@ -393,7 +513,13 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
     },
-  })
+  }
+  if (bounds !== null) {
+    Object.assign(winOptions, { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height })
+  } else {
+    Object.assign(winOptions, { width: 1320, height: 860 })
+  }
+  win = new BrowserWindow(winOptions)
   win.once('ready-to-show', () => { if (!SMOKE) win.show() })
   win.on('close', (e) => {
     if (!quitting) {
@@ -404,6 +530,8 @@ function createWindow() {
   win.on('closed', () => { win = null })
   win.on('focus', () => win.flashFrame(false))
   win.on('page-title-updated', (e) => e.preventDefault())
+  win.on('resize', () => rememberBounds())
+  win.on('move', () => rememberBounds())
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
@@ -425,6 +553,11 @@ function createWindow() {
     }
   })
   loadMain()
+}
+
+function rememberBounds() {
+  if (win === null || win.isDestroyed() || win.isMinimized() || win.isMaximized()) return
+  saveSettings({ windowBounds: win.getBounds() })
 }
 
 // ---------------------------------------------------------------- send-message dialog
@@ -502,6 +635,7 @@ if (!gotLock) {
   app.on('second-instance', () => showWindow())
 
   app.whenReady().then(() => {
+    applySettings()
     rebuildMenu()
     createWindow()
     if (!SMOKE) {
@@ -524,5 +658,6 @@ if (!gotLock) {
     if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
       powerSaveBlocker.stop(powerBlockerId)
     }
+    globalShortcut.unregisterAll()
   })
 }

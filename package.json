@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
-  "version": "0.2.0",
-  "description": "DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端（窗口/原生菜单/托盘/通知/快速发消息）",
+  "version": "0.3.0",
+  "description": "DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端（零配置开箱即用：窗口/会话菜单/托盘/通知/快速发消息/防休眠）",
   "main": "main.js",
   "author": "wuqian",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "start": "electron .",
     "smoke": "electron . --smoke",
     "make-icons": "node scripts/make-icon.js",
-    "dist": "electron-builder --win nsis"
+    "dist": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis"
   },
   "build": {
     "appId": "dev.dsh.desktop",
