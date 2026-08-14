@@ -4,14 +4,15 @@
  *
  * 原生窗口加载运行中的 DSH Web 客户端（默认 http://127.0.0.1:3080），
  * 并叠加桌面集成：
- *   - 原生菜单（主题切换 / 视图缩放 / 设置文档 / 关于）
- *   - 托盘图标（会话运行状态，点击显示窗口）
+ *   - 原生菜单（主题切换 / 会话列表 / 视图缩放 / 设置文档 / 关于）
+ *   - 托盘图标（会话运行状态，点击显示窗口；快速发消息）
  *   - 回合完成 / 代理错误系统通知（订阅 /api/events.host SSE）
+ *   - 会话运行中阻止系统休眠；任务完成时窗口闪烁
  *   - 关窗隐藏到托盘；服务未启动时显示重试页
  *
  * 服务地址可用环境变量 DSH_URL 或命令行 --url= 覆盖。
  */
-const { app, BrowserWindow, Menu, Tray, nativeImage, Notification, dialog, shell, ipcMain } = require('electron')
+const { app, BrowserWindow, Menu, Tray, nativeImage, Notification, dialog, shell, ipcMain, clipboard, powerSaveBlocker } = require('electron')
 const path = require('path')
 
 const ARG_URL = (() => {
@@ -24,15 +25,19 @@ const SMOKE = process.argv.includes('--smoke')
 const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
 const ERROR_HTML = path.join(__dirname, 'error.html')
+const SEND_DIALOG_HTML = path.join(__dirname, 'send-dialog.html')
 
 let win = null
+let sendDialog = null
 let tray = null
 let quitting = false
 let connected = false
 let themePref = 'system'
 let sseTimer = null
-let running = new Map() // sessionId -> { cwd, running }
+let menuRebuildTimer = null
+let powerBlockerId = null
 const lastNotifyAt = new Map() // sessionId -> timestamp (debounce)
+const sessionCache = new Map() // sessionId -> { cwd, running, blank, updatedAt }
 
 // ---------------------------------------------------------------- RPC
 async function rpc(method, payload = {}) {
@@ -64,24 +69,46 @@ async function refreshSessions() {
     const items = value && Array.isArray(value.items) ? value.items : []
     const next = new Map()
     for (const it of items) {
-      const prev = running.get(it.sessionId)
+      const prev = sessionCache.get(it.sessionId)
       next.set(it.sessionId, {
         cwd: it.cwd || (prev && prev.cwd),
         running: !!it.running,
+        blank: !!it.blank,
+        updatedAt: it.updatedAt,
       })
     }
-    running = next
+    sessionCache.clear()
+    for (const [k, v] of next) sessionCache.set(k, v)
     connected = true
   } catch (err) {
     connected = false
   }
   updateTray()
+  scheduleMenuRebuild()
 }
 
 function runningCount() {
   let n = 0
-  for (const s of running.values()) if (s.running) n++
+  for (const s of sessionCache.values()) if (s.running) n++
   return n
+}
+
+function updatePowerSave() {
+  if (SMOKE) return
+  const n = runningCount()
+  if (n > 0 && powerBlockerId === null) {
+    powerBlockerId = powerSaveBlocker.start('prevent-app-suspension')
+  } else if (n === 0 && powerBlockerId !== null) {
+    if (powerSaveBlocker.isStarted(powerBlockerId)) powerSaveBlocker.stop(powerBlockerId)
+    powerBlockerId = null
+  }
+}
+
+function setWindowTitle() {
+  if (win === null || win.isDestroyed()) return
+  const n = runningCount()
+  const suffix = !connected ? '（未连接）' : n > 0 ? '（' + n + ' 个会话运行中）' : ''
+  win.setTitle('DSH Desktop' + suffix)
 }
 
 function updateTray() {
@@ -93,6 +120,7 @@ function updateTray() {
     { label: 'DSH Desktop', enabled: false },
     { type: 'separator' },
     { label: '显示窗口', click: showWindow },
+    { label: '发送消息…', click: openSendDialog },
     { label: status, enabled: false },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit() } },
@@ -110,6 +138,9 @@ function notifyTurnDone(sessionId, cwd) {
     title: 'DSH · 任务完成',
     body: '会话 ' + String(sessionId).slice(0, 8) + (base ? '（' + base + '）' : '') + ' 已结束运行',
   }).show()
+  if (win !== null && !win.isDestroyed() && !win.isFocused()) {
+    win.flashFrame(true)
+  }
 }
 
 // ---------------------------------------------------------------- SSE host stream
@@ -152,22 +183,29 @@ function handleFrame(frame) {
   switch (payload.type) {
     case 'host/session-status': {
       const id = payload.sessionId
-      const prev = running.get(id)
+      const prev = sessionCache.get(id)
       const was = !!(prev && prev.running)
       const now = !!payload.running
-      running.set(id, { cwd: prev ? prev.cwd : undefined, running: now })
+      sessionCache.set(id, { cwd: prev ? prev.cwd : undefined, running: now, blank: false })
       updateTray()
+      setWindowTitle()
+      updatePowerSave()
+      scheduleMenuRebuild()
       if (was && !now) notifyTurnDone(id, prev && prev.cwd)
       break
     }
     case 'host/session-added': {
-      running.set(payload.sessionId, { cwd: payload.cwd, running: false })
+      sessionCache.set(payload.sessionId, { cwd: payload.cwd, running: false, blank: !!payload.blank })
       updateTray()
+      scheduleMenuRebuild()
       break
     }
     case 'host/session-removed': {
-      running.delete(payload.sessionId)
+      sessionCache.delete(payload.sessionId)
       updateTray()
+      setWindowTitle()
+      updatePowerSave()
+      scheduleMenuRebuild()
       break
     }
     case 'host/agent-error': {
@@ -189,7 +227,7 @@ async function setTheme(pref) {
   try {
     await rpc('settings.update', { ns: 'ui-theme', patch: { preference: pref } })
     themePref = pref
-    Menu.setApplicationMenu(buildMenu())
+    rebuildMenu()
   } catch (err) {
     dialog.showErrorBox('DSH Desktop', '主题切换失败：' + err.message)
   }
@@ -202,7 +240,7 @@ async function loadThemePref() {
     const ns = namespaces.find((n) => n.ns === 'ui-theme')
     if (ns && ns.value && typeof ns.value.preference === 'string') {
       themePref = ns.value.preference
-      Menu.setApplicationMenu(buildMenu())
+      rebuildMenu()
     }
   } catch (err) {
     // harness not reachable yet — keep defaults
@@ -210,6 +248,48 @@ async function loadThemePref() {
 }
 
 // ---------------------------------------------------------------- menu
+function scheduleMenuRebuild() {
+  if (menuRebuildTimer !== null) return
+  menuRebuildTimer = setTimeout(() => {
+    menuRebuildTimer = null
+    if (!quitting) rebuildMenu()
+  }, 1500)
+}
+
+function sessionLabel(sessionId, info) {
+  const base = info && info.cwd ? info.cwd.split(/[\\/]/).filter(Boolean).pop() : ''
+  const short = String(sessionId).slice(0, 8)
+  return (info && info.running ? '● ' : '○ ') + (base || short) + (base ? '  (' + short + ')' : '')
+}
+
+function sessionMenuItems() {
+  const items = []
+  if (sessionCache.size === 0) {
+    items.push({ label: connected ? '（暂无会话）' : '（未连接）', enabled: false })
+  } else {
+    for (const [id, info] of sessionCache) {
+      const actions = []
+      if (info && info.cwd) {
+        actions.push({
+          label: '打开工作目录',
+          click: () => {
+            rpc('host.openPath', { path: info.cwd }).catch((err) =>
+              dialog.showErrorBox('DSH Desktop', '无法打开目录：' + err.message))
+          },
+        })
+      }
+      actions.push({
+        label: '复制会话 ID',
+        click: () => clipboard.writeText(String(id)),
+      })
+      items.push({ label: sessionLabel(id, info), submenu: actions })
+    }
+  }
+  items.push({ type: 'separator' })
+  items.push({ label: '刷新列表', click: () => { refreshSessions(); rebuildMenu() } })
+  return items
+}
+
 function themeItems() {
   return [
     { label: '跟随系统', type: 'radio', checked: themePref === 'system', click: () => setTheme('system') },
@@ -229,6 +309,7 @@ function buildMenu() {
         { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => { quitting = true; app.quit() } },
       ],
     },
+    { label: '会话', submenu: sessionMenuItems() },
     { label: '主题', submenu: themeItems() },
     {
       label: '视图',
@@ -271,6 +352,10 @@ function buildMenu() {
       ],
     },
   ])
+}
+
+function rebuildMenu() {
+  Menu.setApplicationMenu(buildMenu())
 }
 
 // ---------------------------------------------------------------- window
@@ -317,6 +402,8 @@ function createWindow() {
     }
   })
   win.on('closed', () => { win = null })
+  win.on('focus', () => win.flashFrame(false))
+  win.on('page-title-updated', (e) => e.preventDefault())
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
@@ -331,6 +418,7 @@ function createWindow() {
     loadErrorPage()
   })
   win.webContents.on('did-finish-load', () => {
+    setWindowTitle()
     if (SMOKE) {
       console.log('SMOKE_OK', win.webContents.getURL())
       setTimeout(() => app.exit(0), 250)
@@ -339,7 +427,70 @@ function createWindow() {
   loadMain()
 }
 
-// ---------------------------------------------------------------- IPC (error page bridge)
+// ---------------------------------------------------------------- send-message dialog
+function isTrustedSender(event) {
+  const url = (event.senderFrame && event.senderFrame.url) || event.sender.getURL()
+  return url.startsWith('file://') || url.startsWith(HARNESS_URL)
+}
+
+function openSendDialog() {
+  if (sendDialog !== null && !sendDialog.isDestroyed()) {
+    sendDialog.focus()
+    return
+  }
+  sendDialog = new BrowserWindow({
+    width: 480,
+    height: 360,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    title: '发送消息',
+    backgroundColor: '#0d1117',
+    icon: path.join(ASSETS, 'icon.png'),
+    parent: win,
+    modal: true,
+    webPreferences: {
+      preload: PRELOAD,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  sendDialog.on('closed', () => { sendDialog = null })
+  sendDialog.loadFile(SEND_DIALOG_HTML).catch(() => {})
+}
+
+ipcMain.handle('desktop:listSessions', (event) => {
+  if (!isTrustedSender(event)) return { error: 'untrusted sender' }
+  const items = []
+  for (const [id, info] of sessionCache) {
+    items.push({ sessionId: String(id), label: sessionLabel(id, info), running: !!(info && info.running) })
+  }
+  return { items }
+})
+
+ipcMain.handle('desktop:sendPrompt', async (event, args) => {
+  if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
+  const sessionId = args && args.sessionId
+  const text = args && typeof args.text === 'string' ? args.text.trim() : ''
+  if (!sessionId || text === '') return { ok: false, error: 'empty session or text' }
+  try {
+    await rpc('session.prompt', {
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text }],
+    })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err.message }
+  }
+})
+
+ipcMain.on('desktop:closeSendDialog', (event) => {
+  if (!isTrustedSender(event)) return
+  if (sendDialog !== null && !sendDialog.isDestroyed()) sendDialog.close()
+})
+
 ipcMain.on('desktop:retry', () => loadMain())
 ipcMain.on('desktop:quit', () => { quitting = true; app.quit() })
 
@@ -351,7 +502,7 @@ if (!gotLock) {
   app.on('second-instance', () => showWindow())
 
   app.whenReady().then(() => {
-    Menu.setApplicationMenu(buildMenu())
+    rebuildMenu()
     createWindow()
     if (!SMOKE) {
       tray = new Tray(nativeImage.createFromPath(path.join(ASSETS, 'tray.png')))
@@ -369,5 +520,9 @@ if (!gotLock) {
   app.on('before-quit', () => {
     quitting = true
     if (sseTimer) clearTimeout(sseTimer)
+    if (menuRebuildTimer) clearTimeout(menuRebuildTimer)
+    if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
+      powerSaveBlocker.stop(powerBlockerId)
+    }
   })
 }
