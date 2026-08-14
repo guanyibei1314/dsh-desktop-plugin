@@ -25,7 +25,19 @@
 | 🔁 断线自愈 | 服务未启动显示重试页（每 5 秒自动重试）；DSH 重启后事件流自动重连 |
 | 🔒 安全默认 | `contextIsolation` + `sandbox`；桥接调用校验发送方 URL |
 
-## 快速开始
+## 下载安装包（无需终端）
+
+直接到 **GitHub Releases** 下载安装包，双击安装，无需任何命令行操作：
+
+**https://github.com/guanyibei1314/dsh-desktop/releases**
+
+- 下载 `DSH-Desktop-Setup-<版本>.exe`（NSIS 安装程序，可选安装目录）
+- 安装后打开「DSH Desktop」即用：自动连接本机 DSH 服务（`http://127.0.0.1:3080`）
+- 每次发版都会自动上传安装包
+
+> 维护者发布流程：`npm run dist` 打包 → 设置 `GH_TOKEN` 环境变量 → `npm run release` 一键创建 Release 并上传安装包（无需 gh CLI）。
+
+## 快速开始（从源码运行）
 
 前置要求：本机已安装 [Node.js ≥ 18](https://nodejs.org/) 且 DSH 服务已在运行。
 
