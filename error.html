@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DSH Desktop</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, Menlo, monospace;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .box { max-width: 560px; padding: 32px; border: 1px solid #30363d; border-radius: 12px; background: #161b22; }
+  .brand { color: #d9a441; font-weight: 700; letter-spacing: 2px; font-size: 14px; }
+  .title { margin: 14px 0 10px; font-size: 18px; font-weight: 700; }
+  .hint { color: #8b949e; font-size: 13px; line-height: 1.7; }
+  code { color: #d9a441; }
+  .row { margin-top: 22px; display: flex; gap: 10px; }
+  button {
+    font: inherit; font-size: 13px; cursor: pointer; padding: 6px 18px; border-radius: 6px;
+    border: 1px solid #30363d; background: #0d1117; color: #e6edf3;
+  }
+  button:hover { border-color: #d9a441; color: #d9a441; }
+  .primary { background: #d9a441; border-color: #d9a441; color: #0d1117; font-weight: 700; }
+  .primary:hover { color: #0d1117; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="brand">◆ DSH DESKTOP</div>
+    <div class="title">无法连接 DeepSeek Harness</div>
+    <div class="hint">
+      请确认 DSH 服务已在 <code id="url">http://127.0.0.1:3080</code> 运行。
+      <br><br>
+      常用启动方式：<code>dsh</code> 或 <code>pnpm dev:web</code>。
+      <br><br>
+      页面将每 5 秒自动重试；服务就绪后会自动加载。
+    </div>
+    <div class="row">
+      <button class="primary" id="retry">立即重试</button>
+      <button id="quit">退出</button>
+    </div>
+  </div>
+  <script>
+    function bridge(name) {
+      try {
+        const b = window.desktopBridge
+        if (b && typeof b[name] === 'function') { b[name](); return true }
+      } catch (e) { /* ignore */ }
+      return false
+    }
+    document.getElementById('retry').onclick = function () {
+      if (!bridge('retry')) location.reload()
+    }
+    document.getElementById('quit').onclick = function () { bridge('quit') }
+    setInterval(function () { bridge('retry') }, 5000)
+  </script>
+</body>
+</html>
