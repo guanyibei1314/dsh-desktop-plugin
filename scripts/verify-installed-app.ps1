@@ -197,8 +197,11 @@ function Test-InstalledPty {
   $exitCode = $null
   try {
     $env:ELECTRON_RUN_AS_NODE = '1'
-    & $InstalledExe $probeFile
-    $exitCode = $LASTEXITCODE
+    # DSH Desktop.exe is a GUI-subsystem executable. Direct invocation from
+    # PowerShell may return before its Node-mode child has consumed probeFile,
+    # so explicitly wait for the process before deleting the probe.
+    $probeProcess = Start-Process -FilePath $InstalledExe -ArgumentList @("`"$probeFile`"") -PassThru -Wait
+    $exitCode = $probeProcess.ExitCode
   } finally {
     if ($null -eq $oldElectronRunAsNode) {
       Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
