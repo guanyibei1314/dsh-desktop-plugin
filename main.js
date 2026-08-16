@@ -186,6 +186,7 @@ async function startBundledDsh() {
     },
   )
   dshProc = child
+  child.on('error', (err) => { captured.push('spawn error: ' + err.message) })
   child.stdout.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
   child.stderr.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
   child.on('exit', () => { if (dshProc === child) { dshProc = null; activeUrl = HARNESS_URL } })
@@ -289,6 +290,7 @@ async function refreshSessions() {
     connected = false
   }
   updateTray()
+  setWindowTitle()
   scheduleMenuRebuild()
 }
 
