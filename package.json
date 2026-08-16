@@ -1,6 +1,6 @@
 {
   "name": "dsh-desktop",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DSH Desktop — DeepSeek Harness 原生客户端（内置 DSH/终端/插件管理/浏览器/Sites/皮肤中心，零配置开箱即用）",
   "main": "bootstrap.js",
   "author": "wuqian",
