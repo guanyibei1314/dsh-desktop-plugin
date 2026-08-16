@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>DSH Sites</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0f14; color: #e6edf3; }
+    main { max-width: 980px; margin: 0 auto; padding: 26px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .sub { color: #8b949e; line-height: 1.6; margin-bottom: 20px; }
+    .panel { background: #111820; border: 1px solid #26303a; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+    .form { display: grid; grid-template-columns: minmax(180px, .7fr) minmax(260px, 1.5fr) auto; gap: 10px; }
+    input { height: 42px; border: 1px solid #303b46; border-radius: 9px; background: #090d12; color: #e6edf3; padding: 0 12px; outline: none; }
+    input:focus { border-color: #6e7681; }
+    button { min-height: 38px; padding: 0 13px; border: 1px solid #303b46; border-radius: 9px; background: #18212b; color: #e6edf3; cursor: pointer; }
+    button:hover { background: #222d39; }
+    button.primary { background: #238636; border-color: #2ea043; }
+    button.danger { background: #3b1518; border-color: #6e252b; }
+    #message { min-height: 20px; color: #d29922; font-size: 13px; margin-top: 10px; }
+    #sites { display: grid; gap: 10px; }
+    .site { border: 1px solid #26303a; border-radius: 12px; background: #0d131a; padding: 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; }
+    .name { font-size: 15px; font-weight: 600; margin-bottom: 5px; }
+    .url { font: 12px/1.45 "Cascadia Mono", Consolas, monospace; color: #8b949e; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .actions { display: flex; gap: 7px; flex-wrap: wrap; justify-content: flex-end; }
+    .empty { color: #8b949e; text-align: center; padding: 34px 10px; }
+    @media (max-width: 720px) {
+      .form { grid-template-columns: 1fr; }
+      .site { grid-template-columns: 1fr; }
+      .actions { justify-content: flex-start; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Sites</h1>
+    <div class="sub">把常用 Web 工具保存成独立桌面工作区。每个 Site 使用自己的持久化浏览器分区，与 DSH 主页面、内置浏览器以及其他 Site 隔离 Cookie / 登录态。</div>
+    <section class="panel">
+      <div class="form">
+        <input id="name" maxlength="80" placeholder="名称，例如：GitHub">
+        <input id="url" autocomplete="off" spellcheck="false" placeholder="https://github.com">
+        <button id="add" class="primary">添加 Site</button>
+      </div>
+      <div id="message" aria-live="polite"></div>
+    </section>
+    <section class="panel">
+      <div id="sites"></div>
+    </section>
+  </main>
+  <script src="sites.js"></script>
+</body>
+</html>
