@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 35
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -44,6 +44,126 @@ jobs:
 
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
+
+      - name: Clean-install and first-run E2E
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw "installer not found" }
+
+          # Use a disposable installation directory so this behaves like a clean
+          # end-user install and never relies on dist/win-unpacked.
+          $installDir = Join-Path $env:RUNNER_TEMP 'dsh-desktop-clean-install'
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+
+          # Clear likely Electron userData directories from earlier test runs.
+          foreach ($candidate in @(
+            (Join-Path $env:APPDATA 'dsh-desktop'),
+            (Join-Path $env:APPDATA 'DSH Desktop')
+          )) {
+            if (Test-Path $candidate) { Remove-Item $candidate -Recurse -Force }
+          }
+
+          Write-Host "[install-e2e] installing $installer -> $installDir"
+          $install = Start-Process -FilePath $installer -ArgumentList @('/S', "/D=$installDir") -PassThru -Wait
+          if ($install.ExitCode -ne 0) { throw "NSIS silent install failed with exit code $($install.ExitCode)" }
+
+          $installedExe = Join-Path $installDir 'DSH Desktop.exe'
+          if (-not (Test-Path $installedExe)) { throw "installed executable not found: $installedExe" }
+          Write-Host "[install-e2e] installed executable exists"
+
+          $desktop = $null
+          try {
+            # Important: no --smoke here. This is the normal first-run path, so
+            # bundled skin reconciliation and bundled DSH cold start both run.
+            $desktop = Start-Process -FilePath $installedExe -PassThru
+            $deadline = (Get-Date).AddSeconds(120)
+            $windowReady = $false
+            $dshReady = $false
+            $dshPort = $null
+
+            while ((Get-Date) -lt $deadline) {
+              Start-Sleep -Seconds 2
+              $desktop.Refresh()
+              if ($desktop.HasExited) {
+                throw "installed DSH Desktop exited during first-run with code $($desktop.ExitCode)"
+              }
+
+              $desktopProcess = Get-Process -Id $desktop.Id -ErrorAction Stop
+              if ($desktopProcess.MainWindowHandle -ne 0) {
+                $windowReady = $true
+              }
+
+              $children = Get-CimInstance Win32_Process | Where-Object {
+                $_.ParentProcessId -eq $desktop.Id -and
+                $_.CommandLine -match 'dsh[\\/]lib[\\/]bin\.js' -and
+                $_.CommandLine -match '\sweb\s'
+              }
+
+              foreach ($child in $children) {
+                if ($child.CommandLine -match '--port\s+(\d+)') {
+                  $dshPort = [int]$Matches[1]
+                  try {
+                    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$dshPort/" -UseBasicParsing -TimeoutSec 3
+                    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
+                      $dshReady = $true
+                      break
+                    }
+                  } catch {
+                    # Service is still warming up; retry until the deadline.
+                  }
+                }
+              }
+
+              if ($windowReady -and $dshReady) { break }
+            }
+
+            if (-not $windowReady) {
+              throw "installed app stayed alive but never exposed a real desktop window within 120 seconds"
+            }
+            if (-not $dshReady) {
+              throw "installed app window opened but bundled DSH never became reachable within 120 seconds"
+            }
+
+            Write-Host "[install-e2e] real desktop window detected"
+            Write-Host "[install-e2e] bundled DSH reachable on 127.0.0.1:$dshPort"
+
+            # The normal first-run path must also have reconciled the bundled
+            # skin package into a private web profile. Search only the two known
+            # Electron userData roots, not the entire profile tree.
+            $profileVerified = $false
+            foreach ($root in @(
+              (Join-Path $env:APPDATA 'dsh-desktop'),
+              (Join-Path $env:APPDATA 'DSH Desktop')
+            )) {
+              $profilePackage = Join-Path $root 'dsh-home\profiles\web\package.json'
+              if (-not (Test-Path $profilePackage)) { continue }
+              $profile = Get-Content $profilePackage -Raw | ConvertFrom-Json
+              $dep = $profile.dependencies.'@linxin666/dsh-skins'
+              $bundles = @($profile.dsh.profile.bundles)
+              if ($dep -like 'link:*' -and $bundles -contains '@linxin666/dsh-skins') {
+                $profileVerified = $true
+                Write-Host "[install-e2e] bundled skin active in installed app web profile"
+                break
+              }
+            }
+            if (-not $profileVerified) {
+              throw "installed app started, but bundled skin was not active in the first-run web profile"
+            }
+          } finally {
+            if ($desktop -and -not $desktop.HasExited) {
+              & taskkill /PID $desktop.Id /T /F | Out-Host
+            }
+          }
+
+          $uninstaller = Get-ChildItem -Path $installDir -Filter 'Uninstall*.exe' -File | Select-Object -First 1
+          if (-not $uninstaller) { throw "NSIS uninstaller not found after installation" }
+          $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+          if ($uninstall.ExitCode -ne 0) { throw "NSIS silent uninstall failed with exit code $($uninstall.ExitCode)" }
+          Start-Sleep -Seconds 2
+          if (Test-Path $installedExe) { throw "installed executable still exists after silent uninstall" }
+          Write-Host "[install-e2e] silent uninstall succeeded"
 
       - name: Audit installer and unpacked runtime
         env:
@@ -113,7 +233,8 @@ jobs:
           - 内置 @linxin666/dsh-skins 皮肤中心与皮肤资产，安装 DSH Desktop 后无需再单独下载皮肤插件。
           - 启动时只从安装包本地路径把皮肤包链接到私有 web Profile，不自动拉取 @latest，也不依赖运行时联网。
           - 保留插件管理、内置浏览器、Sites、终端和完整 bundled DSH；SSH、远程控制等高权限 dsh-web-ui 扩展仍作为可选插件，不默认塞进安装包。
-          - CI 同时验证打包后 EXE、pnpm、DSH Profile、离线皮肤注册和安装包体积；相对 v0.4.0 最多允许增长 3 MiB，且绝对上限 125 MiB。
+          - CI 验证 NSIS 清洁安装、安装后正常首次启动、真实桌面窗口、bundled DSH 冷启动、离线皮肤 Profile 激活、静默卸载及安装包体积。
+          - 相对 v0.4.0 最多允许增长 3 MiB，且绝对上限 125 MiB。
           EOF
           )
 
