@@ -60,8 +60,8 @@ jobs:
           retention-days: 7
 
   publish:
-    # One-time guarded publisher: only a main-branch push whose commit message
-    # deliberately starts with "release:" may replace public Release assets.
+    # Guarded publisher: only an intentional main-branch release commit can
+    # replace public Release assets. PR jobs remain contents:read only.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -86,6 +86,8 @@ jobs:
             dist/DSH-Desktop-Setup-0.3.0.exe \
             dist/DSH-Desktop-Setup-0.3.0.exe.blockmap \
             dist/latest.yml \
-            --clobber
+            --clobber \
+            --repo guanyibei1314/dsh-desktop-plugin
           gh release edit v0.3.0 \
+            --repo guanyibei1314/dsh-desktop-plugin \
             --notes $'## DSH Desktop 0.3.0\n\n零配置开箱即用：自动连接本机 DSH；没有则启动内置 DeepSeek Harness。\n\n### 2026-08-16 安全与体积优化\n- 主 DSH Web 页面不再获得 desktop/terminal IPC bridge；PTY/Shell 权限仅暴露给精确匹配的本地终端页。\n- 本地高权限页面增加 CSP。\n- Windows 安装包由约 135.50 MiB 降至约 120.12 MiB（约 -11.35%），保留完整内置 DSH。\n- Windows CI 已完成 npm ci、语法检查与 NSIS 实际构建。'
