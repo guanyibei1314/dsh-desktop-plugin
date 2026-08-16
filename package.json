@@ -10,7 +10,7 @@
     "smoke": "electron . --smoke",
     "make-icons": "node scripts/make-icon.js",
     "release": "node scripts/release.js",
-    "dist": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis"
+    "dist": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "dev.dsh.desktop",
