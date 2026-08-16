@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>DSH Desktop</title>
 <style>
   :root { color-scheme: dark; }
@@ -31,13 +32,13 @@
 <body>
   <div class="box">
     <div class="brand">◆ DSH DESKTOP</div>
-    <div class="title">无法连接 DeepSeek Harness</div>
+    <div class="title">DeepSeek Harness 暂未就绪</div>
     <div class="hint">
-      请确认 DSH 服务已在 <code id="url">http://127.0.0.1:3080</code> 运行。
+      DSH Desktop 会先尝试连接 <code id="url">http://127.0.0.1:3080</code>，没有本机服务时会自动启动内置 DeepSeek Harness。
       <br><br>
-      常用启动方式：<code>dsh</code> 或 <code>pnpm dev:web</code>。
+      首次初始化可能需要一些时间；通常不需要手动安装 Node.js 或执行命令。
       <br><br>
-      页面将每 5 秒自动重试；服务就绪后会自动加载。
+      页面将每 5 秒自动重试。
     </div>
     <div class="row">
       <button class="primary" id="retry">立即重试</button>
