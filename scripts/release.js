@@ -15,7 +15,7 @@ const { execFileSync } = require('child_process')
 
 const ROOT = path.join(__dirname, '..')
 const pkg = require(path.join(ROOT, 'package.json'))
-const OWNER_REPO = 'guanyibei1314/dsh-desktop'
+const OWNER_REPO = 'guanyibei1314/dsh-desktop-plugin'
 const VERSION = 'v' + pkg.version
 const API = 'https://api.github.com'
 const TOKEN = process.env.GH_TOKEN || process.env.GITHUB_TOKEN
@@ -63,7 +63,7 @@ function releaseNotes() {
   const log = git(['log', '--oneline', '-8'])
   const lines = log === null ? [] : log.split('\n').filter(Boolean)
   const changes = lines.length === 0 ? '- 见仓库提交历史' : lines.map((l) => '- ' + l).join('\n')
-  return `## DSH Desktop ${pkg.version}\n\n零配置开箱即用：下载安装包双击安装，自动连接本机 DSH 服务（http://127.0.0.1:3080）。\n\n### 变更\n${changes}\n\n### 使用\n1. 安装（可选安装目录）\n2. 确保本机已运行 DSH 服务（dsh 或 pnpm dev:web）\n3. 打开「DSH Desktop」，从托盘/菜单使用全部功能\n\n详见 README。`
+  return `## DSH Desktop ${pkg.version}\n\n零配置开箱即用：下载安装包双击安装。应用会优先连接本机 DSH 服务；若没有，则自动启动安装包内置的 DeepSeek Harness，无需安装 Node.js、无需手动启动服务。\n\n### 变更\n${changes}\n\n### 使用\n1. 安装（可选安装目录）\n2. 打开「DSH Desktop」\n3. 应用会自动连接已有 DSH，或启动内置 DSH\n4. 从主窗口、托盘、会话菜单和内置终端使用桌面功能\n\n详见 README。`
 }
 
 async function uploadAsset(uploadUrl, fileName, filePath, contentType) {
