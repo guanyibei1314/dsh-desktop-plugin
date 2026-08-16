@@ -8,6 +8,8 @@ const { spawn } = require('child_process')
 const WEB_PROFILE = 'web'
 const BUNDLED_PACKAGE = '@linxin666/dsh-skins'
 const BUNDLED_VERSION = '0.1.18'
+const SKIN_CENTER_PACKAGE = '@linxin666/dsh-client-ui-skin-center'
+const SKIN_CENTER_VERSION = '0.1.18'
 
 function physicalNodeModulePath(...parts) {
   const inAsar = path.join(__dirname, 'node_modules', ...parts)
@@ -28,8 +30,16 @@ function bundledPackageDir() {
   return physicalNodeModulePath('@linxin666', 'dsh-skins')
 }
 
+function bundledSkinCenterDir() {
+  return physicalNodeModulePath('@linxin666', 'dsh-client-ui-skin-center')
+}
+
 function dshHomeDir() {
   return path.join(app.getPath('userData'), 'dsh-home')
+}
+
+function webProfileDir() {
+  return path.join(dshHomeDir(), 'profiles', WEB_PROFILE)
 }
 
 function runtimeBinDir() {
@@ -77,8 +87,8 @@ function pluginEnvironment() {
     DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED || '1',
     CI: 'true',
     PATH: basePath ? `${binDir}${path.delimiter}${basePath}` : binDir,
-    // The selected skin bundle is already in the installer. Profile
-    // reconciliation must never turn into a hidden registry download.
+    // Everything reconciled here is already inside the installer. Never turn
+    // desktop startup into an implicit registry download.
     npm_config_offline: 'true',
     npm_config_prefer_offline: 'true',
   })
@@ -93,7 +103,7 @@ function logFile() {
 }
 
 function profilePackageFile() {
-  return path.join(dshHomeDir(), 'profiles', WEB_PROFILE, 'package.json')
+  return path.join(webProfileDir(), 'package.json')
 }
 
 function readJson(file) {
@@ -119,13 +129,17 @@ function readProfilePackage() {
   return profilePackage && typeof profilePackage === 'object' ? profilePackage : null
 }
 
-function profileDependency(profilePackage = readProfilePackage()) {
+function profileDependencyFor(packageName, profilePackage = readProfilePackage()) {
   if (!profilePackage) return null
   for (const key of ['dependencies', 'optionalDependencies', 'devDependencies']) {
     const deps = profilePackage[key]
-    if (deps && typeof deps[BUNDLED_PACKAGE] === 'string') return deps[BUNDLED_PACKAGE]
+    if (deps && typeof deps[packageName] === 'string') return deps[packageName]
   }
   return null
+}
+
+function profileDependency(profilePackage = readProfilePackage()) {
+  return profileDependencyFor(BUNDLED_PACKAGE, profilePackage)
 }
 
 function profileHasBundle(profilePackage = readProfilePackage()) {
@@ -133,35 +147,38 @@ function profileHasBundle(profilePackage = readProfilePackage()) {
   return Array.isArray(bundles) && bundles.includes(BUNDLED_PACKAGE)
 }
 
-function validateBundledPackage() {
-  const dir = bundledPackageDir()
+function validatePackage(dir, expectedName, expectedVersion, missingMessage) {
   const pkg = readJson(path.join(dir, 'package.json'))
-  if (!pkg || pkg.name !== BUNDLED_PACKAGE) throw new Error('内置皮肤包缺失，请重新安装 DSH Desktop。')
-  if (pkg.version !== BUNDLED_VERSION) {
-    throw new Error(`内置皮肤包版本异常：期望 ${BUNDLED_VERSION}，实际 ${pkg.version || 'unknown'}。`)
-  }
-  const skinsDir = path.join(dir, 'skins')
-  if (!fs.existsSync(skinsDir) || fs.readdirSync(skinsDir).length === 0) {
-    throw new Error('内置皮肤资产缺失，请重新安装 DSH Desktop。')
+  if (!pkg || pkg.name !== expectedName) throw new Error(missingMessage)
+  if (pkg.version !== expectedVersion) {
+    throw new Error(`内置包版本异常：${expectedName} 期望 ${expectedVersion}，实际 ${pkg.version || 'unknown'}。`)
   }
   return dir
 }
 
-function runDshPluginAdd(linkSpec) {
+function validateBundledPackage() {
+  const dir = validatePackage(
+    bundledPackageDir(),
+    BUNDLED_PACKAGE,
+    BUNDLED_VERSION,
+    '内置皮肤包缺失，请重新安装 DSH Desktop。',
+  )
+  const skinsDir = path.join(dir, 'skins')
+  if (!fs.existsSync(skinsDir) || fs.readdirSync(skinsDir).length === 0) {
+    throw new Error('内置皮肤资产缺失，请重新安装 DSH Desktop。')
+  }
+  validatePackage(
+    bundledSkinCenterDir(),
+    SKIN_CENTER_PACKAGE,
+    SKIN_CENTER_VERSION,
+    '内置 Skin Center 依赖缺失，请重新安装 DSH Desktop。',
+  )
+  return dir
+}
+
+function runCaptured(commandArgs, options, failurePrefix) {
   return new Promise((resolve, reject) => {
-    const bin = dshBinPath()
-    if (!fs.existsSync(bin)) return reject(new Error('内置 DSH CLI 缺失，请重新安装 DSH Desktop。'))
-    fs.mkdirSync(dshHomeDir(), { recursive: true })
-    const child = spawn(
-      process.execPath,
-      ['--expose-internals', bin, 'plugin', '--profile', WEB_PROFILE, 'add', linkSpec],
-      {
-        cwd: app.getPath('home'),
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: pluginEnvironment(),
-      },
-    )
+    const child = spawn(process.execPath, commandArgs, options)
     let output = ''
     const collect = (data) => {
       output += String(data)
@@ -172,48 +189,97 @@ function runDshPluginAdd(linkSpec) {
     child.once('error', reject)
     child.once('exit', (code, signal) => {
       if (code === 0) return resolve(output)
-      reject(new Error(`内置皮肤注册失败（退出码 ${code === null ? 'null' : code}${signal ? `，${signal}` : ''}）：${output.slice(-3000)}`))
+      reject(new Error(`${failurePrefix}（退出码 ${code === null ? 'null' : code}${signal ? `，${signal}` : ''}）：${output.slice(-3000)}`))
     })
   })
+}
+
+function runDshPluginAdd(linkSpec) {
+  const bin = dshBinPath()
+  if (!fs.existsSync(bin)) return Promise.reject(new Error('内置 DSH CLI 缺失，请重新安装 DSH Desktop。'))
+  fs.mkdirSync(dshHomeDir(), { recursive: true })
+  return runCaptured(
+    ['--expose-internals', bin, 'plugin', '--profile', WEB_PROFILE, 'add', linkSpec],
+    {
+      cwd: app.getPath('home'),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: pluginEnvironment(),
+    },
+    '内置皮肤注册失败',
+  )
+}
+
+function runProfileDependencyLink(linkSpec) {
+  const pnpm = pnpmBinPath()
+  if (!fs.existsSync(pnpm)) return Promise.reject(new Error('内置 pnpm 运行时缺失，请重新安装 DSH Desktop。'))
+  fs.mkdirSync(webProfileDir(), { recursive: true })
+  return runCaptured(
+    [pnpm, 'add', '--save-prod', '--offline', linkSpec],
+    {
+      cwd: webProfileDir(),
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: pluginEnvironment(),
+    },
+    '内置 Skin Center 依赖固定失败',
+  )
 }
 
 async function ensureBundledWebUi() {
   const dir = validateBundledPackage()
   const linkSpec = normalizedLinkSpec(dir)
-  const profilePackage = readProfilePackage()
+  const skinCenterLinkSpec = normalizedLinkSpec(bundledSkinCenterDir())
+  let profilePackage = readProfilePackage()
   const existing = profileDependency(profilePackage)
   const state = readJson(stateFile())
   const desktopManaged = Boolean(state && state.managedByDesktop)
 
-  // Never replace an explicit user-managed registry or different local link.
-  // Desktop owns only the exact local link it previously recorded itself.
+  // Never replace an explicit user-managed dsh-skins registry or different
+  // local link. Desktop owns only the exact bundle link it recorded itself.
   if (existing && existing !== linkSpec && !desktopManaged) {
     appendLog(`skip: ${BUNDLED_PACKAGE} is user-managed (${existing})`)
     return { status: 'user-managed', dependency: existing }
   }
 
-  if (
-    existing === linkSpec &&
-    profileHasBundle(profilePackage) &&
-    desktopManaged &&
-    state.version === BUNDLED_VERSION &&
-    state.linkSpec === linkSpec
-  ) {
-    return { status: 'ready', dependency: existing }
+  const bundleReady = existing === linkSpec && profileHasBundle(profilePackage)
+  if (!bundleReady) {
+    appendLog(`reconcile bundle: ${BUNDLED_PACKAGE}@${BUNDLED_VERSION} -> ${linkSpec}`)
+    await runDshPluginAdd(linkSpec)
+    profilePackage = readProfilePackage()
+    const afterBundle = profileDependency(profilePackage)
+    if (afterBundle !== linkSpec) {
+      throw new Error(`内置皮肤已执行安装，但 web profile 未记录预期的本地链接：${String(afterBundle)}。`)
+    }
+    if (!profileHasBundle(profilePackage)) {
+      throw new Error(`内置皮肤已写入依赖，但 ${BUNDLED_PACKAGE} 未进入 web profile bundle 层。`)
+    }
   }
 
-  appendLog(`reconcile: ${BUNDLED_PACKAGE}@${BUNDLED_VERSION} -> ${linkSpec}`)
-  await runDshPluginAdd(linkSpec)
-  const afterProfile = readProfilePackage()
-  const after = profileDependency(afterProfile)
-  if (after !== linkSpec) {
-    throw new Error(`内置皮肤已执行安装，但 web profile 未记录预期的本地链接：${String(after)}。`)
+  // dsh-skins' bundle patch refers to Skin Center by package name. A pnpm
+  // link: dependency does not install the linked package's own dependencies
+  // into the consumer profile, so a restart can otherwise leave the loader
+  // unable to resolve @linxin666/dsh-client-ui-skin-center. Persist that
+  // already-packaged dependency as its own local profile link, but do NOT add
+  // it to dsh.profile.bundles (dsh-skins already owns activation via its patch).
+  profilePackage = readProfilePackage()
+  const existingSkinCenter = profileDependencyFor(SKIN_CENTER_PACKAGE, profilePackage)
+  const skinCenterWasDesktopManaged = Boolean(state && state.skinCenterManagedByDesktop)
+  if (!existingSkinCenter || (skinCenterWasDesktopManaged && existingSkinCenter !== skinCenterLinkSpec)) {
+    appendLog(`reconcile dependency: ${SKIN_CENTER_PACKAGE}@${SKIN_CENTER_VERSION} -> ${skinCenterLinkSpec}`)
+    await runProfileDependencyLink(skinCenterLinkSpec)
+    profilePackage = readProfilePackage()
+  } else if (existingSkinCenter !== skinCenterLinkSpec) {
+    appendLog(`keep: ${SKIN_CENTER_PACKAGE} is user-managed (${existingSkinCenter})`)
   }
-  // DSH's plugin command reconciles dependencies that export dsh.bundle into
-  // dsh.profile.bundles. This manifest is the authoritative activation state;
-  // pnpm's human-readable list output is intentionally not used as a gate.
-  if (!profileHasBundle(afterProfile)) {
-    throw new Error(`内置皮肤已写入依赖，但 ${BUNDLED_PACKAGE} 未进入 web profile bundle 层。`)
+
+  const after = profileDependency(profilePackage)
+  const afterSkinCenter = profileDependencyFor(SKIN_CENTER_PACKAGE, profilePackage)
+  if (after !== linkSpec || !profileHasBundle(profilePackage)) {
+    throw new Error('内置皮肤 Profile 状态在依赖固定后失效。')
+  }
+  if (!afterSkinCenter) {
+    throw new Error(`${SKIN_CENTER_PACKAGE} 未写入 web profile，重启后将无法解析 Skin Center。`)
   }
 
   const next = {
@@ -221,16 +287,25 @@ async function ensureBundledWebUi() {
     package: BUNDLED_PACKAGE,
     version: BUNDLED_VERSION,
     linkSpec,
+    skinCenterPackage: SKIN_CENTER_PACKAGE,
+    skinCenterVersion: SKIN_CENTER_VERSION,
+    skinCenterManagedByDesktop: afterSkinCenter === skinCenterLinkSpec,
+    skinCenterLinkSpec: afterSkinCenter === skinCenterLinkSpec ? skinCenterLinkSpec : null,
     updatedAt: new Date().toISOString(),
   }
   fs.writeFileSync(stateFile(), JSON.stringify(next, null, 2), 'utf8')
-  appendLog(`ready: ${BUNDLED_PACKAGE}@${BUNDLED_VERSION}`)
-  return { status: 'installed', dependency: after }
+  appendLog(`ready: ${BUNDLED_PACKAGE}@${BUNDLED_VERSION}; ${SKIN_CENTER_PACKAGE}=${afterSkinCenter}`)
+
+  const unchanged = bundleReady && existingSkinCenter === afterSkinCenter && afterSkinCenter === skinCenterLinkSpec
+  return { status: unchanged ? 'ready' : 'installed', dependency: after, skinCenterDependency: afterSkinCenter }
 }
 
 module.exports = {
   BUNDLED_PACKAGE,
   BUNDLED_VERSION,
+  SKIN_CENTER_PACKAGE,
+  SKIN_CENTER_VERSION,
   bundledPackageDir,
+  bundledSkinCenterDir,
   ensureBundledWebUi,
 }
