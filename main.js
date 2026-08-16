@@ -2,8 +2,9 @@
 /**
  * DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端。
  *
- * 零配置：原生窗口加载运行中的 DSH Web 客户端（默认 http://127.0.0.1:3080），
- * 无需任何用户配置。打包一条命令：npm run dist（镜像已内置）。
+ * 零配置：原生窗口加载运行中的 DSH Web 客户端（默认 http://127.0.0.1:3080）；
+ * 若本机没有 DSH 服务，则自动启动打包内置的 DeepSeek Harness（Electron 自带
+ * Node 运行时，用户无需安装 Node 或执行任何命令）。打包一条命令：npm run dist。
  *
  * 桌面集成：
  *   - 原生菜单（会话列表 / 主题 / 选项 / 视图 / 帮助）
@@ -18,6 +19,8 @@
 const { app, BrowserWindow, Menu, Tray, nativeImage, Notification, dialog, shell, ipcMain, clipboard, powerSaveBlocker, globalShortcut, screen } = require('electron')
 const fs = require('fs')
 const path = require('path')
+const net = require('net')
+const { spawn } = require('child_process')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
@@ -25,6 +28,12 @@ const ARG_URL = (() => {
 })()
 const HARNESS_URL = (process.env.DSH_URL || ARG_URL || 'http://127.0.0.1:3080').replace(/\/+$/, '')
 const SMOKE = process.argv.includes('--smoke')
+
+// ---------------------------------------------------------------- bundled DeepSeek Harness runtime
+// 零配置的核心：优先连接本机已有服务（兼容现状）；没有则用 Electron 自带的
+// Node 运行时启动打包内置的 DSH CLI（无需用户安装 Node / 执行命令）。
+let dshProc = null       // 内置 DSH 子进程
+let activeUrl = HARNESS_URL // 实际连接的 Harness URL（内置启动后可能变化）
 
 const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
@@ -113,9 +122,131 @@ function rememberedBounds() {
   return onScreen ? b : null
 }
 
+// ---------------------------------------------------------------- bundled DeepSeek Harness runtime
+/** 打包内置的 DSH CLI 入口（asar 内 node_modules）。 */
+function dshBinPath() {
+  return path.join(__dirname, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+}
+
+function hasBundledDsh() {
+  try { return fs.existsSync(dshBinPath()) } catch (err) { return false }
+}
+
+/** 内置 DSH 的独立数据目录，不污染用户自己的 ~/.dsh。 */
+function dshHomeDir() {
+  return path.join(app.getPath('userData'), 'dsh-home')
+}
+
+/** 探测一个 Harness URL 是否可用。 */
+async function probeUrl(url, timeoutMs = 2500) {
+  try {
+    const res = await fetch(url + '/', { signal: AbortSignal.timeout(timeoutMs) })
+    return res.ok
+  } catch (err) {
+    return false
+  }
+}
+
+/** 申请一个空闲的 loopback 端口。 */
+function pickPort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.once('error', reject)
+    srv.listen(0, '127.0.0.1', () => {
+      const port = srv.address().port
+      srv.close(() => resolve(port))
+    })
+  })
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。 */
+async function startBundledDsh() {
+  if (dshProc !== null && activeUrl !== HARNESS_URL) return activeUrl
+  if (!hasBundledDsh()) throw new Error('内置 DeepSeek Harness 缺失（node_modules/@deepseek-ai/dsh）')
+  const port = await pickPort()
+  const home = dshHomeDir()
+  try { fs.mkdirSync(home, { recursive: true }) } catch (err) { /* ignore */ }
+  const captured = []
+  const child = spawn(
+    process.execPath,
+    ['--expose-internals', dshBinPath(), 'web', '--host', '127.0.0.1', '--port', String(port)],
+    {
+      cwd: home,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: Object.assign({}, process.env, {
+        ELECTRON_RUN_AS_NODE: '1',
+        DSH_HOME: home,
+        DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED || '1',
+      }),
+    },
+  )
+  dshProc = child
+  child.stdout.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
+  child.stderr.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
+  child.on('exit', () => { if (dshProc === child) { dshProc = null; activeUrl = HARNESS_URL } })
+
+  const url = 'http://127.0.0.1:' + port
+  const deadline = Date.now() + 90000
+  while (Date.now() < deadline) {
+    if (await probeUrl(url, 1000)) {
+      activeUrl = url
+      return url
+    }
+    if (dshProc === null) break // 子进程提前退出
+    await delay(1000)
+  }
+  stopBundledDsh()
+  throw new Error('内置 DeepSeek Harness 启动超时：' + captured.join('').slice(-2000))
+}
+
+/** 停止内置 DSH 子进程树。 */
+function stopBundledDsh() {
+  const child = dshProc
+  dshProc = null
+  if (child === null) return
+  try {
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true })
+    } else {
+      child.kill('SIGTERM')
+    }
+  } catch (err) { /* ignore */ }
+}
+
+/**
+ * 决定实际连接的 Harness URL：
+ * 1. 用户显式指定 --url / DSH_URL：只连它，失败就报错页（尊重用户意图）。
+ * 2. 默认：先探测 3080（本机已有服务则直接复用）；
+ * 3. 没有则启动打包内置的 DSH 并等待就绪。
+ * @returns 就绪的 URL；null 表示不可用（走错误页）。
+ */
+async function ensureHarness() {
+  if (process.env.DSH_URL || ARG_URL) {
+    return (await probeUrl(HARNESS_URL)) ? HARNESS_URL : null
+  }
+  if (await probeUrl(HARNESS_URL)) {
+    activeUrl = HARNESS_URL
+    return HARNESS_URL
+  }
+  // 冒烟测试保持快速失败，不启动内置 DSH（冷启动很慢）。
+  if (SMOKE) return null
+  if (!hasBundledDsh()) return null
+  try {
+    return await startBundledDsh()
+  } catch (err) {
+    process.stderr.write(String(err && err.message || err) + '\n')
+    return null
+  }
+}
+
 // ---------------------------------------------------------------- RPC
 async function rpc(method, payload = {}) {
-  const res = await fetch(HARNESS_URL + '/api/' + method, {
+  const res = await fetch(activeUrl + '/api/' + method, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -225,7 +356,7 @@ function connectEvents() {
   const controller = new AbortController()
   const run = async () => {
     try {
-      const res = await fetch(HARNESS_URL + '/api/events.host', { signal: controller.signal })
+      const res = await fetch(activeUrl + '/api/events.host', { signal: controller.signal })
       if (!res.ok || !res.body) throw new Error('SSE HTTP ' + (res && res.status))
       const reader = res.body.getReader()
       const decoder = new TextDecoder()
@@ -465,7 +596,7 @@ function buildMenu() {
               dialog.showErrorBox('DSH Desktop', '无法打开设置文档：' + err.message))
           },
         },
-        { label: '在浏览器中打开 DSH', click: () => shell.openExternal(HARNESS_URL) },
+        { label: '在浏览器中打开 DSH', click: () => shell.openExternal(activeUrl) },
         { type: 'separator' },
         {
           label: '关于 DSH Desktop',
@@ -473,7 +604,7 @@ function buildMenu() {
             type: 'info',
             title: '关于',
             message: 'DSH Desktop ' + app.getVersion(),
-            detail: 'DeepSeek Harness 桌面客户端\n连接：' + HARNESS_URL + '\n零配置，开箱即用',
+            detail: 'DeepSeek Harness 桌面客户端\n连接：' + activeUrl + '\n零配置，开箱即用',
           }),
         },
       ],
@@ -486,9 +617,20 @@ function rebuildMenu() {
 }
 
 // ---------------------------------------------------------------- window
-function loadMain() {
+async function loadMain() {
   if (!win) return
-  win.loadURL(HARNESS_URL).catch(() => loadErrorPage())
+  let url = HARNESS_URL
+  try {
+    url = await ensureHarness()
+  } catch (err) {
+    loadErrorPage()
+    return
+  }
+  if (url === null) {
+    loadErrorPage()
+    return
+  }
+  win.loadURL(url).catch(() => loadErrorPage())
 }
 
 function loadErrorPage() {
@@ -611,7 +753,7 @@ function rememberBounds() {
 // ---------------------------------------------------------------- send-message dialog
 function isTrustedSender(event) {
   const url = (event.senderFrame && event.senderFrame.url) || event.sender.getURL()
-  return url.startsWith('file://') || url.startsWith(HARNESS_URL)
+  return url.startsWith('file://') || url.startsWith(activeUrl) || url.startsWith(HARNESS_URL)
 }
 
 function openSendDialog() {
@@ -831,6 +973,7 @@ if (!gotLock) {
     quitting = true
     if (sseTimer) clearTimeout(sseTimer)
     if (menuRebuildTimer) clearTimeout(menuRebuildTimer)
+    stopBundledDsh()
     cleanupPty()
     if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
       powerSaveBlocker.stop(powerBlockerId)
