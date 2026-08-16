@@ -77,8 +77,8 @@ function pluginEnvironment() {
     DSH_TELEMETRY_DISABLED: process.env.DSH_TELEMETRY_DISABLED || '1',
     CI: 'true',
     PATH: basePath ? `${binDir}${path.delimiter}${basePath}` : binDir,
-    // This operation must be completely offline: the selected skin bundle is
-    // physically shipped inside DSH Desktop and linked into the web profile.
+    // The selected skin bundle is already in the installer. Profile
+    // reconciliation must never turn into a hidden registry download.
     npm_config_offline: 'true',
     npm_config_prefer_offline: 'true',
   })
@@ -90,6 +90,10 @@ function stateFile() {
 
 function logFile() {
   return path.join(app.getPath('userData'), 'bundled-web-ui.log')
+}
+
+function profilePackageFile() {
+  return path.join(dshHomeDir(), 'profiles', WEB_PROFILE, 'package.json')
 }
 
 function readJson(file) {
@@ -110,14 +114,23 @@ function normalizedLinkSpec(dir) {
   return `link:${normalized}`
 }
 
-function profileDependency() {
-  const profilePackage = readJson(path.join(dshHomeDir(), 'profiles', WEB_PROFILE, 'package.json'))
-  if (!profilePackage || typeof profilePackage !== 'object') return null
+function readProfilePackage() {
+  const profilePackage = readJson(profilePackageFile())
+  return profilePackage && typeof profilePackage === 'object' ? profilePackage : null
+}
+
+function profileDependency(profilePackage = readProfilePackage()) {
+  if (!profilePackage) return null
   for (const key of ['dependencies', 'optionalDependencies', 'devDependencies']) {
     const deps = profilePackage[key]
     if (deps && typeof deps[BUNDLED_PACKAGE] === 'string') return deps[BUNDLED_PACKAGE]
   }
   return null
+}
+
+function profileHasBundle(profilePackage = readProfilePackage()) {
+  const bundles = profilePackage && profilePackage.dsh && profilePackage.dsh.profile && profilePackage.dsh.profile.bundles
+  return Array.isArray(bundles) && bundles.includes(BUNDLED_PACKAGE)
 }
 
 function validateBundledPackage() {
@@ -167,20 +180,22 @@ function runDshPluginAdd(linkSpec) {
 async function ensureBundledWebUi() {
   const dir = validateBundledPackage()
   const linkSpec = normalizedLinkSpec(dir)
-  const existing = profileDependency()
+  const profilePackage = readProfilePackage()
+  const existing = profileDependency(profilePackage)
   const state = readJson(stateFile())
+  const desktopManaged = Boolean(state && state.managedByDesktop)
 
-  // Respect an explicit user-managed registry/link installation. Desktop only
-  // owns entries it originally installed as its bundled local link.
-  if (existing && !existing.startsWith('link:') && !(state && state.managedByDesktop)) {
+  // Never replace an explicit user-managed registry or different local link.
+  // Desktop owns only the exact local link it previously recorded itself.
+  if (existing && existing !== linkSpec && !desktopManaged) {
     appendLog(`skip: ${BUNDLED_PACKAGE} is user-managed (${existing})`)
     return { status: 'user-managed', dependency: existing }
   }
 
   if (
     existing === linkSpec &&
-    state &&
-    state.managedByDesktop === true &&
+    profileHasBundle(profilePackage) &&
+    desktopManaged &&
     state.version === BUNDLED_VERSION &&
     state.linkSpec === linkSpec
   ) {
@@ -189,10 +204,18 @@ async function ensureBundledWebUi() {
 
   appendLog(`reconcile: ${BUNDLED_PACKAGE}@${BUNDLED_VERSION} -> ${linkSpec}`)
   await runDshPluginAdd(linkSpec)
-  const after = profileDependency()
-  if (!after || !after.startsWith('link:')) {
-    throw new Error(`内置皮肤已执行安装但 web profile 未记录 ${BUNDLED_PACKAGE}。`)
+  const afterProfile = readProfilePackage()
+  const after = profileDependency(afterProfile)
+  if (after !== linkSpec) {
+    throw new Error(`内置皮肤已执行安装，但 web profile 未记录预期的本地链接：${String(after)}。`)
   }
+  // DSH's plugin command reconciles dependencies that export dsh.bundle into
+  // dsh.profile.bundles. This manifest is the authoritative activation state;
+  // pnpm's human-readable list output is intentionally not used as a gate.
+  if (!profileHasBundle(afterProfile)) {
+    throw new Error(`内置皮肤已写入依赖，但 ${BUNDLED_PACKAGE} 未进入 web profile bundle 层。`)
+  }
+
   const next = {
     managedByDesktop: true,
     package: BUNDLED_PACKAGE,
