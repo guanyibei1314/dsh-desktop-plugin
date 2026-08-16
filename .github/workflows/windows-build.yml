@@ -42,12 +42,14 @@ jobs:
           $process = Start-Process -FilePath $app -ArgumentList "--smoke" -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "packaged smoke failed with exit code $($process.ExitCode)" }
 
-      - name: Verify packaged plugin runtime
+      - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
 
       - name: Audit installer and unpacked runtime
         env:
-          DSH_MAX_INSTALLER_MIB: '150'
+          DSH_MAX_INSTALLER_MIB: '125'
+          DSH_BASELINE_INSTALLER_BYTES: '126499002'
+          DSH_MAX_INSTALLER_GROWTH_MIB: '3'
         run: npm run audit:package
 
       - name: Report installer size
@@ -108,10 +110,10 @@ jobs:
           零配置 DeepSeek Harness 桌面端。
 
           ### 本版重点
-          - 内置安全隔离的插件安装 / 升级 / 卸载环境，使用官方 DSH web Profile 对账语义。
-          - 内置 WebContentsView 浏览器，远程网页无 Node/Electron 权限并默认拒绝权限申请。
-          - 新增 Sites：把常用网页保存为独立工作区，每个 Site 使用隔离的持久化会话分区。
-          - 增加打包运行时闭包、打包后插件执行和安装包体积审计，继续保留内置 DSH、终端和 PTY。
+          - 内置 @linxin666/dsh-skins 皮肤中心与皮肤资产，安装 DSH Desktop 后无需再单独下载皮肤插件。
+          - 启动时只从安装包本地路径把皮肤包链接到私有 web Profile，不自动拉取 @latest，也不依赖运行时联网。
+          - 保留插件管理、内置浏览器、Sites、终端和完整 bundled DSH；SSH、远程控制等高权限 dsh-web-ui 扩展仍作为可选插件，不默认塞进安装包。
+          - CI 同时验证打包后 EXE、pnpm、DSH Profile、离线皮肤注册和安装包体积；相对 v0.4.0 最多允许增长 3 MiB，且绝对上限 125 MiB。
           EOF
           )
 

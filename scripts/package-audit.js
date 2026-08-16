@@ -61,3 +61,13 @@ const max = Number(process.env.DSH_MAX_INSTALLER_MIB || 0)
 if (Number.isFinite(max) && max > 0 && mib(bytes) > max) {
   throw new Error(`package audit: installer ${mib(bytes).toFixed(2)} MiB exceeds budget ${max.toFixed(2)} MiB`)
 }
+
+const baseline = Number(process.env.DSH_BASELINE_INSTALLER_BYTES || 0)
+const maxGrowthMiB = Number(process.env.DSH_MAX_INSTALLER_GROWTH_MIB || 0)
+if (Number.isFinite(baseline) && baseline > 0) {
+  const delta = bytes - baseline
+  console.log(`[package-audit] delta vs baseline ${baseline} bytes: ${delta >= 0 ? '+' : ''}${delta} bytes (${delta >= 0 ? '+' : ''}${mib(delta).toFixed(2)} MiB)`)
+  if (Number.isFinite(maxGrowthMiB) && maxGrowthMiB > 0 && delta > maxGrowthMiB * 1024 * 1024) {
+    throw new Error(`package audit: installer grew ${mib(delta).toFixed(2)} MiB, exceeding allowed growth ${maxGrowthMiB.toFixed(2)} MiB`)
+  }
+}
