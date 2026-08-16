@@ -11,8 +11,9 @@ const MODULES = path.join(ROOT, 'dist', 'win-unpacked', 'resources', 'app.asar.u
 const DSH_BIN = path.join(MODULES, '@deepseek-ai', 'dsh', 'lib', 'bin.js')
 const PNPM_BIN = path.join(MODULES, 'pnpm', 'bin', 'pnpm.mjs')
 const SKINS_DIR = path.join(MODULES, '@linxin666', 'dsh-skins')
+const SKIN_CENTER_PACKAGE = path.join(MODULES, '@linxin666', 'dsh-client-ui-skin-center', 'package.json')
 
-for (const target of [APP, DSH_BIN, PNPM_BIN, path.join(SKINS_DIR, 'package.json')]) {
+for (const target of [APP, DSH_BIN, PNPM_BIN, path.join(SKINS_DIR, 'package.json'), SKIN_CENTER_PACKAGE]) {
   if (!fs.existsSync(target)) throw new Error(`packaged plugin runtime missing: ${target}`)
 }
 
@@ -29,6 +30,11 @@ fs.mkdirSync(runtimeBin, { recursive: true })
 
 function cmdQuote(value) {
   return `"${String(value).replace(/"/g, '""')}"`
+}
+
+function normalizeFs(value) {
+  const normalized = path.resolve(value).replace(/\\/g, '/')
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
 fs.writeFileSync(
@@ -88,20 +94,37 @@ try {
   process.stdout.write('[plugin-runtime] offline bundled skin link succeeded\n')
   if (addResult.stdout) process.stdout.write(String(addResult.stdout).slice(-3000))
 
-  const profilePackageFile = path.join(dshHome, 'profiles', 'web', 'package.json')
+  const profileDir = path.join(dshHome, 'profiles', 'web')
+  const profilePackageFile = path.join(profileDir, 'package.json')
   if (!fs.existsSync(profilePackageFile)) throw new Error('web profile package.json was not created')
   const profilePackage = JSON.parse(fs.readFileSync(profilePackageFile, 'utf8'))
   const dependency = profilePackage.dependencies && profilePackage.dependencies['@linxin666/dsh-skins']
-  if (typeof dependency !== 'string' || !dependency.startsWith('link:')) {
-    throw new Error(`bundled skin was not reconciled as a local link: ${String(dependency)}`)
+  if (dependency !== linkSpec) {
+    throw new Error(`bundled skin was not reconciled as the expected local link: ${String(dependency)}`)
   }
 
-  const finalList = runDsh(['plugin', '--profile', 'web', 'list', '--depth', '0'])
-  const combined = `${finalList.stdout || ''}\n${finalList.stderr || ''}`
-  if (!combined.includes('@linxin666/dsh-skins')) {
-    throw new Error('bundled skin package is absent from final plugin list')
+  // DSH's plugin command reconciles dsh.bundle dependencies into this
+  // manifest list. This is the authoritative activation state; `plugin list`
+  // is merely pnpm's human-readable output and is not a stable API.
+  const bundles = profilePackage.dsh && profilePackage.dsh.profile && profilePackage.dsh.profile.bundles
+  if (!Array.isArray(bundles) || !bundles.includes('@linxin666/dsh-skins')) {
+    throw new Error('bundled skin dependency did not enter dsh.profile.bundles')
   }
-  process.stdout.write('[plugin-runtime] bundled skin is active in isolated web profile without registry access\n')
+
+  const linkedPackageFile = path.join(profileDir, 'node_modules', '@linxin666', 'dsh-skins', 'package.json')
+  if (!fs.existsSync(linkedPackageFile)) throw new Error('web profile did not materialize the bundled skin link')
+  const linkedPackage = JSON.parse(fs.readFileSync(linkedPackageFile, 'utf8'))
+  if (linkedPackage.name !== '@linxin666/dsh-skins' || linkedPackage.version !== '0.1.18') {
+    throw new Error('web profile linked unexpected bundled skin package metadata')
+  }
+
+  const linkedDir = path.dirname(linkedPackageFile)
+  const realLinkedDir = fs.realpathSync(linkedDir)
+  if (normalizeFs(realLinkedDir) !== normalizeFs(SKINS_DIR)) {
+    throw new Error(`web profile skin link points outside packaged bundle: ${realLinkedDir}`)
+  }
+
+  process.stdout.write('[plugin-runtime] bundled skin is active in dsh.profile.bundles with a packaged local link and no registry access\n')
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true })
 }
