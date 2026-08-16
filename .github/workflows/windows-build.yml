@@ -34,6 +34,14 @@ jobs:
       - name: Build Windows installer
         run: npm run dist
 
+      - name: Smoke test packaged application
+        shell: pwsh
+        run: |
+          $app = "dist/win-unpacked/DSH Desktop.exe"
+          if (-not (Test-Path $app)) { throw "packaged app not found: $app" }
+          $process = Start-Process -FilePath $app -ArgumentList "--smoke" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "packaged smoke failed with exit code $($process.ExitCode)" }
+
       - name: Audit installer and unpacked runtime
         env:
           DSH_MAX_INSTALLER_MIB: '150'
