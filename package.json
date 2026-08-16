@@ -20,6 +20,11 @@
       "node_modules/**"
     ],
     "npmRebuild": false,
+    "compression": "maximum",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "files": [
       "main.js",
       "preload.js",
@@ -28,7 +33,8 @@
       "splash.html",
       "terminal.html",
       "assets/**",
-      "node_modules/@xterm/**"
+      "node_modules/@xterm/**",
+      "!node_modules/**/*.map"
     ],
     "win": {
       "target": "nsis",

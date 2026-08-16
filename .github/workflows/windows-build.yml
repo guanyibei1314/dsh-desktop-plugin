@@ -1,0 +1,60 @@
+name: Windows build
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Static syntax checks
+        shell: pwsh
+        run: |
+          node --check main.js
+          node --check preload.js
+          node --check scripts/release.js
+
+      - name: Build Windows installer
+        run: npm run dist
+
+      - name: Report installer size
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installer not found" }
+          $mib = [math]::Round($exe.Length / 1MB, 2)
+          Write-Host "INSTALLER_PATH=$($exe.FullName)"
+          Write-Host "INSTALLER_BYTES=$($exe.Length)"
+          Write-Host "INSTALLER_MIB=$mib"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-windows
+          path: |
+            dist/DSH-Desktop-Setup-*.exe
+            dist/DSH-Desktop-Setup-*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+          retention-days: 7
