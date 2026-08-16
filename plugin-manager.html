@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>DSH 插件管理</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0f14; color: #e6edf3; }
+    main { max-width: 980px; margin: 0 auto; padding: 26px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    .sub { color: #8b949e; margin-bottom: 22px; line-height: 1.6; }
+    .panel { background: #111820; border: 1px solid #26303a; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    input { flex: 1 1 420px; min-width: 260px; height: 42px; border: 1px solid #303b46; border-radius: 9px; background: #090d12; color: #e6edf3; padding: 0 12px; outline: none; }
+    input:focus { border-color: #6e7681; }
+    button { height: 40px; padding: 0 14px; border: 1px solid #303b46; border-radius: 9px; background: #18212b; color: #e6edf3; cursor: pointer; }
+    button:hover:not(:disabled) { background: #222d39; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    button.primary { background: #238636; border-color: #2ea043; }
+    button.danger { background: #3b1518; border-color: #6e252b; }
+    .meta { display: flex; gap: 12px; flex-wrap: wrap; font-size: 13px; color: #8b949e; margin-top: 12px; }
+    .badge { border: 1px solid #303b46; border-radius: 999px; padding: 4px 9px; }
+    .restart { display: none; margin-top: 14px; padding: 12px; border-radius: 10px; background: #2a210d; border: 1px solid #715d21; }
+    .restart.visible { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .warning { margin-top: 12px; padding: 11px 12px; border-radius: 10px; background: #26181a; border: 1px solid #633238; color: #e6b8bc; font-size: 12.5px; line-height: 1.6; }
+    pre { min-height: 300px; max-height: 430px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; background: #05080c; border-radius: 10px; padding: 14px; color: #b9c4cf; font: 12.5px/1.55 "Cascadia Mono", Consolas, monospace; }
+    .hint { font-size: 12.5px; color: #8b949e; line-height: 1.6; margin-top: 10px; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>插件安装 / 升级环境</h1>
+    <div class="sub">管理 DSH Desktop 内置运行时的 <strong>web</strong> Profile 插件。若主窗口通过 <code>DSH_URL</code> / <code>--url</code> 连接外部 DSH，本界面不会修改那个外部实例的插件环境。</div>
+
+    <section class="panel">
+      <div class="row">
+        <input id="package" autocomplete="off" spellcheck="false" placeholder="例如：@scope/dsh-plugin 或 package@1.2.3">
+        <button id="install" class="primary">安装</button>
+        <button id="update">升级</button>
+        <button id="remove" class="danger">卸载</button>
+        <button id="list">刷新列表</button>
+        <button id="cancel" disabled>取消任务</button>
+      </div>
+      <div class="meta">
+        <span id="profile" class="badge">Profile: web</span>
+        <span id="state" class="badge">空闲</span>
+      </div>
+      <div id="restartBox" class="restart">
+        <span>插件集合已变化，需要重启 DSH Desktop 才会加载新的 Profile。</span>
+        <button id="restart">立即重启</button>
+      </div>
+      <div class="warning"><strong>只安装你信任的插件。</strong> DSH 插件属于本地代码扩展，安装后的插件会以 DSH 本地进程权限运行，并可能访问其被授予的文件、网络和工具能力。包名白名单可以阻止命令注入，但不能把不可信插件本身变成安全代码。</div>
+      <div class="hint">安全限制：此界面只接受 npm Registry 包名和受限版本格式，不接受 shell 命令、URL、Git 地址或任意参数。底层仍由官方 <code>dsh plugin --profile web</code> 完成 Profile 对账。</div>
+    </section>
+
+    <section class="panel">
+      <pre id="output" aria-live="polite">等待操作…</pre>
+    </section>
+  </main>
+  <script src="plugin-manager.js"></script>
+</body>
+</html>

@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
       - name: Checkout
@@ -22,21 +22,33 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
           cache: npm
 
       - name: Install dependencies
         run: npm ci
 
       - name: Static syntax checks
-        shell: pwsh
-        run: |
-          node --check main.js
-          node --check preload.js
-          node --check scripts/release.js
+        run: npm run check
 
       - name: Build Windows installer
         run: npm run dist
+
+      - name: Smoke test packaged application
+        shell: pwsh
+        run: |
+          $app = "dist/win-unpacked/DSH Desktop.exe"
+          if (-not (Test-Path $app)) { throw "packaged app not found: $app" }
+          $process = Start-Process -FilePath $app -ArgumentList "--smoke" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "packaged smoke failed with exit code $($process.ExitCode)" }
+
+      - name: Verify packaged plugin runtime
+        run: npm run verify:packaged-plugin
+
+      - name: Audit installer and unpacked runtime
+        env:
+          DSH_MAX_INSTALLER_MIB: '150'
+        run: npm run audit:package
 
       - name: Report installer size
         shell: pwsh
@@ -60,8 +72,7 @@ jobs:
           retention-days: 7
 
   publish:
-    # Guarded publisher: only an intentional main-branch release commit can
-    # replace public Release assets. PR jobs remain contents:read only.
+    # Only an intentional release commit on main may create/update a public Release.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -69,25 +80,44 @@ jobs:
       contents: write
 
     steps:
+      - name: Checkout release metadata
+        uses: actions/checkout@v4
+
       - name: Download verified installer artifact
         uses: actions/download-artifact@v4
         with:
           name: dsh-desktop-windows
           path: dist
 
-      - name: Replace v0.3.0 Release assets
+      - name: Create or update versioned Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          test -f dist/DSH-Desktop-Setup-0.3.0.exe
-          gh release upload v0.3.0 \
-            dist/DSH-Desktop-Setup-0.3.0.exe \
-            dist/DSH-Desktop-Setup-0.3.0.exe.blockmap \
-            dist/latest.yml \
-            --clobber \
-            --repo guanyibei1314/dsh-desktop-plugin
-          gh release edit v0.3.0 \
-            --repo guanyibei1314/dsh-desktop-plugin \
-            --notes $'## DSH Desktop 0.3.0\n\n零配置开箱即用：自动连接本机 DSH；没有则启动内置 DeepSeek Harness。\n\n### 2026-08-16 安全与体积优化\n- 主 DSH Web 页面不再获得 desktop/terminal IPC bridge；PTY/Shell 权限仅暴露给精确匹配的本地终端页。\n- 本地高权限页面增加 CSP。\n- Windows 安装包由约 135.50 MiB 降至约 120.12 MiB（约 -11.35%），保留完整内置 DSH。\n- Windows CI 已完成 npm ci、语法检查与 NSIS 实际构建。'
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          EXE="dist/DSH-Desktop-Setup-${VERSION}.exe"
+          test -f "$EXE"
+          test -f "${EXE}.blockmap"
+          test -f dist/latest.yml
+
+          NOTES=$(cat <<EOF
+          ## DSH Desktop ${VERSION}
+
+          零配置 DeepSeek Harness 桌面端。
+
+          ### 本版重点
+          - 内置安全隔离的插件安装 / 升级 / 卸载环境，使用官方 DSH web Profile 对账语义。
+          - 内置 WebContentsView 浏览器，远程网页无 Node/Electron 权限并默认拒绝权限申请。
+          - 新增 Sites：把常用网页保存为独立工作区，每个 Site 使用隔离的持久化会话分区。
+          - 增加打包运行时闭包、打包后插件执行和安装包体积审计，继续保留内置 DSH、终端和 PTY。
+          EOF
+          )
+
+          if gh release view "$TAG" --repo guanyibei1314/dsh-desktop-plugin >/dev/null 2>&1; then
+            gh release upload "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
+            gh release edit "$TAG" --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
+          else
+            gh release create "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
+          fi
