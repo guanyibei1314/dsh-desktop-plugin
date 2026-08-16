@@ -48,7 +48,15 @@
       "sites-preload.js",
       "assets/**",
       "node_modules/@xterm/**",
-      "!node_modules/**/*.map"
+      "!node_modules/**/*.map",
+      "!node_modules/pnpm/artifacts/**",
+      "!node_modules/node-pty/prebuilds/win32-arm64/**",
+      "!node_modules/node-pty/third_party/**",
+      "!node_modules/node-pty/src/**",
+      "!node_modules/node-pty/deps/**",
+      "!node_modules/node-pty/scripts/**",
+      "!node_modules/node-pty/typings/**",
+      "!node_modules/node-pty/binding.gyp"
     ],
     "win": {
       "target": "nsis",
