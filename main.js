@@ -123,9 +123,17 @@ function rememberedBounds() {
 }
 
 // ---------------------------------------------------------------- bundled DeepSeek Harness runtime
-/** 打包内置的 DSH CLI 入口（asar 内 node_modules）。 */
+/**
+ * 打包内置的 DSH CLI 入口。
+ * 打包后 node_modules 被 asarUnpack 到 app.asar.unpacked（真实目录），DSH 的
+ * profile module-fallback 会在这些包上创建 junction 链接，必须使用真实路径，
+ * 因此 asar 内的路径要重写到 unpacked 位置。
+ */
 function dshBinPath() {
-  return path.join(__dirname, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  const inAsar = path.join(__dirname, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  const unpacked = inAsar.replace(/[\\/]app\.asar[\\/]/, '\\app.asar.unpacked\\')
+  if (unpacked !== inAsar && fs.existsSync(unpacked)) return unpacked
+  return inAsar
 }
 
 function hasBundledDsh() {

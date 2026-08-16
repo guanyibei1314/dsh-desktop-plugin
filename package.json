@@ -15,6 +15,11 @@
   "build": {
     "appId": "dev.dsh.desktop",
     "productName": "DSH Desktop",
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/**"
+    ],
+    "npmRebuild": false,
     "files": [
       "main.js",
       "preload.js",
