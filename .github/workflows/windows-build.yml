@@ -61,26 +61,13 @@ jobs:
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
 
-      - name: Clean-install built installer E2E
+      - name: Clean-install, cold-start and restart E2E
         shell: pwsh
         run: |
           $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
           if (-not $installer) { throw 'built installer not found' }
-          & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $installer -Label built-v050
-          if ($LASTEXITCODE -ne 0) { throw "built installer E2E failed with exit code $LASTEXITCODE" }
-
-      - name: Verify exact published v0.5.0 installer
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        shell: pwsh
-        run: |
-          $published = Join-Path $env:RUNNER_TEMP 'DSH-Desktop-Setup-0.5.0-published.exe'
-          Invoke-WebRequest -Uri 'https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.5.0/DSH-Desktop-Setup-0.5.0.exe' -OutFile $published -UseBasicParsing
-          $hash = (Get-FileHash -Path $published -Algorithm SHA256).Hash.ToLowerInvariant()
-          $expected = '1b80baf4b3de9438100d4e360746666fd5d1e9ef01ed83818c83396b277fc88b'
-          if ($hash -ne $expected) { throw "published v0.5.0 SHA-256 mismatch: $hash" }
-          Write-Host "[install-e2e] published v0.5.0 SHA-256 verified: $hash"
-          & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $published -Label published-v050
-          if ($LASTEXITCODE -ne 0) { throw "published v0.5.0 E2E failed with exit code $LASTEXITCODE" }
+          & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $installer -Label release-candidate
+          if ($LASTEXITCODE -ne 0) { throw "release candidate E2E failed with exit code $LASTEXITCODE" }
 
       - name: Audit installer and unpacked runtime
         env:
@@ -111,7 +98,8 @@ jobs:
           retention-days: 7
 
   publish:
-    # Only an intentional release commit on main may create/update a public Release.
+    # Only an intentional release commit on main may create/update a public Release,
+    # and only after the full clean-install/cold-start/restart E2E job above passes.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -148,7 +136,7 @@ jobs:
 
           ### 本版重点
           - 内置 @linxin666/dsh-skins 皮肤中心与皮肤资产，安装 DSH Desktop 后无需再单独下载皮肤插件。
-          - 启动时只从安装包本地路径把皮肤包链接到私有 web Profile，不自动拉取 @latest，也不依赖运行时联网。
+          - Skin Center 作为安装包内本地依赖持久固定到私有 web Profile，确保冷启动和后续重启都可解析，不自动拉取 @latest。
           - 保留插件管理、内置浏览器、Sites、终端和完整 bundled DSH；SSH、远程控制等高权限 dsh-web-ui 扩展仍作为可选插件，不默认塞进安装包。
           - 发布门禁验证 NSIS 清洁安装、installed node-pty、冷启动、bundled DSH HTTP、真实主窗口、皮肤 Profile、第二次启动、静默卸载及安装包体积。
           - 相对 v0.4.0 最多允许增长 3 MiB，且绝对上限 125 MiB。
