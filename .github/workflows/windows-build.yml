@@ -42,6 +42,9 @@ jobs:
           $process = Start-Process -FilePath $app -ArgumentList "--smoke" -PassThru -Wait
           if ($process.ExitCode -ne 0) { throw "packaged smoke failed with exit code $($process.ExitCode)" }
 
+      - name: Verify packaged plugin runtime
+        run: npm run verify:packaged-plugin
+
       - name: Audit installer and unpacked runtime
         env:
           DSH_MAX_INSTALLER_MIB: '150'
@@ -108,7 +111,7 @@ jobs:
           - 内置安全隔离的插件安装 / 升级 / 卸载环境，使用官方 DSH web Profile 对账语义。
           - 内置 WebContentsView 浏览器，远程网页无 Node/Electron 权限并默认拒绝权限申请。
           - 新增 Sites：把常用网页保存为独立工作区，每个 Site 使用隔离的持久化会话分区。
-          - 增加打包运行时闭包检查与安装包体积审计，继续保留内置 DSH、终端和 PTY。
+          - 增加打包运行时闭包、打包后插件执行和安装包体积审计，继续保留内置 DSH、终端和 PTY。
           EOF
           )
 
