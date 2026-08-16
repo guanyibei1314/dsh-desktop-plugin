@@ -30,9 +30,13 @@ const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
 const ERROR_HTML = path.join(__dirname, 'error.html')
 const SEND_DIALOG_HTML = path.join(__dirname, 'send-dialog.html')
+const SPLASH_HTML = path.join(__dirname, 'splash.html')
+const TERMINAL_HTML = path.join(__dirname, 'terminal.html')
 
 let win = null
+let splash = null
 let sendDialog = null
+let termWin = null
 let tray = null
 let quitting = false
 let connected = false
@@ -191,6 +195,7 @@ function updateTray() {
     { type: 'separator' },
     { label: '显示窗口', click: showWindow },
     { label: '发送消息…', click: openSendDialog },
+    { label: '打开终端', click: openTerminal },
     { label: status, enabled: false },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit() } },
@@ -425,6 +430,7 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '重新加载', accelerator: 'CmdOrCtrl+R', click: () => win && win.webContents.reload() },
+        { label: '打开终端', accelerator: 'CmdOrCtrl+Shift+T', click: openTerminal },
         { type: 'separator' },
         { label: '退出', accelerator: 'CmdOrCtrl+Q', click: () => { quitting = true; app.quit() } },
       ],
@@ -490,6 +496,43 @@ function loadErrorPage() {
   win.loadFile(ERROR_HTML).catch(() => {})
 }
 
+// ---------------------------------------------------------------- splash
+/**
+ * Show a lightweight startup window before the DSH web client is ready.
+ *
+ * The main window stays hidden until the remote client renders its first
+ * frame, which can take a long time for profiles with many plugins. The
+ * splash decouples perceived startup latency from the plugin count.
+ */
+function createSplash() {
+  if (splash !== null && !splash.isDestroyed()) return
+  splash = new BrowserWindow({
+    width: 420,
+    height: 320,
+    frame: false,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    show: true,
+    backgroundColor: '#0d1117',
+    icon: path.join(ASSETS, 'icon.png'),
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  splash.on('closed', () => { splash = null })
+  splash.loadFile(SPLASH_HTML).catch(() => {})
+}
+
+/** Dismiss the startup splash once the real shell has a first frame. */
+function dismissSplash() {
+  if (splash !== null && !splash.isDestroyed()) splash.destroy()
+  splash = null
+}
+
 function showWindow() {
   if (win === null) createWindow()
   else {
@@ -520,7 +563,10 @@ function createWindow() {
     Object.assign(winOptions, { width: 1320, height: 860 })
   }
   win = new BrowserWindow(winOptions)
-  win.once('ready-to-show', () => { if (!SMOKE) win.show() })
+  win.once('ready-to-show', () => {
+    dismissSplash()
+    if (!SMOKE) win.show()
+  })
   win.on('close', (e) => {
     if (!quitting) {
       e.preventDefault()
@@ -543,7 +589,9 @@ function createWindow() {
       app.exit(1)
       return
     }
+    dismissSplash()
     loadErrorPage()
+    if (!win.isVisible()) win.show()
   })
   win.webContents.on('did-finish-load', () => {
     setWindowTitle()
@@ -593,6 +641,133 @@ function openSendDialog() {
   sendDialog.loadFile(SEND_DIALOG_HTML).catch(() => {})
 }
 
+// ---------------------------------------------------------------- terminal (node-pty + xterm window)
+let ptyProc = null
+
+function clampDim(value, fallback, min, max) {
+  const n = Number(value)
+  if (!Number.isInteger(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+/** Resolve the interactive shell executable for the current platform. */
+function resolveShell() {
+  if (process.platform === 'win32') {
+    const sysRoot = process.env.SystemRoot || 'C:\Windows'
+    const candidates = [
+      path.join(sysRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'),
+      path.join(sysRoot, 'System32', 'cmd.exe'),
+    ]
+    for (const c of candidates) if (fs.existsSync(c)) return c
+    return 'powershell.exe'
+  }
+  return process.env.SHELL || '/bin/bash'
+}
+
+/** Kill the active PTY, if any. Safe to call repeatedly. */
+function cleanupPty() {
+  if (ptyProc !== null) {
+    try { ptyProc.kill() } catch (err) { /* already gone */ }
+    ptyProc = null
+  }
+}
+
+/** Open (or focus) the built-in terminal window. */
+function openTerminal() {
+  if (termWin !== null && !termWin.isDestroyed()) {
+    termWin.focus()
+    return
+  }
+  termWin = new BrowserWindow({
+    width: 900,
+    height: 560,
+    minWidth: 480,
+    minHeight: 300,
+    title: '终端 — DSH Desktop',
+    backgroundColor: '#0d1117',
+    icon: path.join(ASSETS, 'icon.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: PRELOAD,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  })
+  termWin.setMenuBarVisibility(false)
+  termWin.on('closed', () => { termWin = null; cleanupPty() })
+  termWin.loadFile(TERMINAL_HTML).catch(() => {})
+}
+
+/** Spawn one PTY for the terminal window. Returns spawn facts for the renderer. */
+function spawnPty(cols, rows) {
+  cleanupPty()
+  let pty
+  try {
+    pty = require('node-pty')
+  } catch (err) {
+    return { ok: false, error: 'node-pty 不可用：' + (err && err.message || err) }
+  }
+  const shell = resolveShell()
+  let cwd = process.env.USERPROFILE || process.env.HOME
+  if (!cwd) {
+    try { cwd = require('os').homedir() } catch (err) { cwd = require('path').parse(process.cwd()).root }
+  }
+  try {
+    ptyProc = pty.spawn(shell, [], {
+      name: 'xterm-color',
+      cols: clampDim(cols, 100, 20, 400),
+      rows: clampDim(rows, 30, 5, 200),
+      cwd,
+      env: process.env,
+    })
+  } catch (err) {
+    return { ok: false, error: '启动 shell 失败：' + (err && err.message || err) }
+  }
+  ptyProc.onData((data) => {
+    if (termWin !== null && !termWin.isDestroyed()) termWin.webContents.send('terminal:data', data)
+  })
+  ptyProc.onExit(({ exitCode, signal }) => {
+    if (termWin !== null && !termWin.isDestroyed()) {
+      termWin.webContents.send('terminal:exit', { exitCode, signal })
+    }
+    ptyProc = null
+  })
+  return { ok: true, pid: ptyProc.pid }
+}
+
+ipcMain.handle('terminal:spawn', (event, args) => {
+  if (!isTrustedSender(event)) return { ok: false, error: 'untrusted sender' }
+  return spawnPty(args && args.cols, args && args.rows)
+})
+
+ipcMain.on('terminal:input', (event, data) => {
+  if (!isTrustedSender(event)) return
+  if (ptyProc !== null && typeof data === 'string') {
+    try { ptyProc.write(data) } catch (err) { /* ignore */ }
+  }
+})
+
+ipcMain.on('terminal:resize', (event, args) => {
+  if (!isTrustedSender(event)) return
+  if (ptyProc !== null && args && typeof args === 'object') {
+    try {
+      ptyProc.resize(clampDim(args.cols, 100, 20, 400), clampDim(args.rows, 30, 5, 200))
+    } catch (err) { /* ignore */ }
+  }
+})
+
+ipcMain.on('terminal:close', (event) => {
+  if (!isTrustedSender(event)) return
+  cleanupPty()
+  if (termWin !== null && !termWin.isDestroyed()) termWin.close()
+})
+
+ipcMain.on('desktop:openTerminal', (event) => {
+  if (!isTrustedSender(event)) return
+  openTerminal()
+})
+
 ipcMain.handle('desktop:listSessions', (event) => {
   if (!isTrustedSender(event)) return { error: 'untrusted sender' }
   const items = []
@@ -637,6 +812,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     applySettings()
     rebuildMenu()
+    if (!SMOKE) createSplash()
     createWindow()
     if (!SMOKE) {
       tray = new Tray(nativeImage.createFromPath(path.join(ASSETS, 'tray.png')))
@@ -655,6 +831,7 @@ if (!gotLock) {
     quitting = true
     if (sseTimer) clearTimeout(sseTimer)
     if (menuRebuildTimer) clearTimeout(menuRebuildTimer)
+    cleanupPty()
     if (powerBlockerId !== null && powerSaveBlocker.isStarted(powerBlockerId)) {
       powerSaveBlocker.stop(powerBlockerId)
     }

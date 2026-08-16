@@ -1,7 +1,7 @@
 {
   "name": "dsh-desktop",
   "version": "0.3.0",
-  "description": "DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端（零配置开箱即用：窗口/会话菜单/托盘/通知/快速发消息/防休眠）",
+  "description": "DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端（零配置开箱即用：窗口/会话菜单/托盘/通知/快速发消息/防休眠/内置终端）",
   "main": "main.js",
   "author": "wuqian",
   "license": "MIT",
@@ -20,7 +20,10 @@
       "preload.js",
       "error.html",
       "send-dialog.html",
-      "assets/**"
+      "splash.html",
+      "terminal.html",
+      "assets/**",
+      "node_modules/@xterm/**"
     ],
     "win": {
       "target": "nsis",
@@ -32,6 +35,11 @@
       "shortcutName": "DSH Desktop",
       "artifactName": "DSH-Desktop-Setup-${version}.exe"
     }
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^5.5.0",
+    "node-pty": "^1.1.0"
   },
   "devDependencies": {
     "electron": "^43.4.0",

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DSH Desktop</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d1117; color: #e6edf3;
+    font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, Menlo, monospace;
+    display: flex; align-items: center; justify-content: center;
+    user-select: none; cursor: default;
+  }
+  .box { text-align: center; padding: 32px; }
+  .brand { color: #d9a441; font-weight: 700; letter-spacing: 2px; font-size: 14px; }
+  .mark {
+    width: 44px; height: 44px; margin: 20px auto 18px; border-radius: 11px;
+    background: linear-gradient(135deg, #d9a441, #47848f);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+  .title { font-size: 15px; font-weight: 700; color: #e6edf3; }
+  .hint { margin-top: 10px; color: #8b949e; font-size: 12px; line-height: 1.7; }
+  .hint code { color: #d9a441; }
+  .dots { margin-top: 16px; color: #8b949e; font-size: 12px; }
+  .dots span { display: inline-block; width: 5px; height: 5px; margin: 0 2px; border-radius: 50%; background: #d9a441; animation: blink 1.2s infinite; }
+  .dots span:nth-child(2) { animation-delay: .2s; }
+  .dots span:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%,100% { opacity: .2; } 50% { opacity: 1; } }
+</style>
+</head>
+<body>
+  <div class="box">
+    <div class="brand">◆ DSH DESKTOP</div>
+    <div class="mark"></div>
+    <div class="title">正在连接 DeepSeek Harness</div>
+    <div class="hint">目标服务：<code id="url">http://127.0.0.1:3080</code></div>
+    <div class="dots"><span></span><span></span><span></span></div>
+  </div>
+</body>
+</html>

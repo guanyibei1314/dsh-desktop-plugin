@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>终端 — DSH Desktop</title>
+<link rel="stylesheet" href="node_modules/@xterm/xterm/css/xterm.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: #0d1117; color: #e6edf3;
+    font-family: ui-monospace, 'Cascadia Mono', 'SF Mono', Consolas, Menlo, monospace;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 7px 12px; background: #161b22; border-bottom: 1px solid #30363d;
+    font-size: 12px; color: #8b949e; user-select: none;
+    -webkit-app-region: drag;
+  }
+  header .title { color: #d9a441; font-weight: 700; letter-spacing: 1px; }
+  header button {
+    -webkit-app-region: no-drag;
+    font: inherit; cursor: pointer; padding: 3px 12px; border-radius: 6px;
+    border: 1px solid #30363d; background: #0d1117; color: #e6edf3;
+  }
+  header button:hover { border-color: #d9a441; color: #d9a441; }
+  #terminal { flex: 1; min-height: 0; padding: 6px 0 0 8px; }
+  #status {
+    padding: 4px 12px; font-size: 11px; color: #8b949e;
+    background: #161b22; border-top: 1px solid #30363d; min-height: 22px; white-space: pre-wrap;
+  }
+  #status.err { color: #f85149; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="title">◆ DSH 终端</span>
+    <button id="close" title="关闭终端">关闭</button>
+  </header>
+  <div id="terminal"></div>
+  <div id="status">正在启动 shell…</div>
+  <script src="node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script>
+    (function () {
+      var b = window.terminalBridge
+      var statusEl = document.getElementById('status')
+      var terminalEl = document.getElementById('terminal')
+
+      function setStatus(msg, cls) {
+        statusEl.textContent = msg || ''
+        statusEl.className = cls ? cls : ''
+      }
+
+      function FitAddonClass() {
+        if (window.FitAddon && window.FitAddon.FitAddon) return window.FitAddon.FitAddon
+        if (window.FitAddon) return window.FitAddon
+        return null
+      }
+
+      var TerminalCtor = window.Terminal || null
+      var AddonCtor = FitAddonClass()
+
+      if (!TerminalCtor || !AddonCtor || !b) {
+        setStatus('终端组件加载失败（xterm 或桥接不可用）', 'err')
+        return
+      }
+
+      var term = new TerminalCtor({
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", "Cascadia Mono", monospace',
+        theme: { background: '#0d1117', foreground: '#e6edf3', cursor: '#d9a441' },
+      })
+      var fit = new AddonCtor()
+      term.loadAddon(fit)
+      term.open(terminalEl)
+      try { fit.fit() } catch (e) { /* first layout may be zero-size */ }
+      term.focus()
+
+      var exited = false
+
+      function applyResize() {
+        try { fit.fit() } catch (e) { /* ignore */ }
+        b.resize(term.cols, term.rows)
+      }
+
+      b.onData(function (data) { term.write(data) })
+      b.onExit(function (info) {
+        exited = true
+        var code = info && typeof info.exitCode === 'number' ? info.exitCode : null
+        term.write('\r\n[进程已退出' + (code === null ? '' : '，退出码 ' + code) + ']\r\n')
+        setStatus('进程已退出', 'err')
+      })
+      b.onError(function (msg) {
+        term.write('\r\n[错误] ' + msg + '\r\n')
+        setStatus(msg, 'err')
+      })
+
+      var inputDisposable = term.onData(function (data) { b.input(data) })
+      window.addEventListener('resize', applyResize)
+
+      b.spawn(term.cols, term.rows).then(function (res) {
+        if (res && res.ok) {
+          setStatus('shell 已启动（PID ' + res.pid + '）')
+          applyResize()
+        } else {
+          setStatus((res && res.error) || '启动 shell 失败', 'err')
+        }
+      }).catch(function (err) {
+        setStatus('启动失败：' + (err && err.message || err), 'err')
+      })
+
+      document.getElementById('close').onclick = function () { b.close() }
+      window.addEventListener('beforeunload', function () {
+        try { inputDisposable.dispose() } catch (e) { /* ignore */ }
+        b.close()
+      })
+    })()
+  </script>
+</body>
+</html>
