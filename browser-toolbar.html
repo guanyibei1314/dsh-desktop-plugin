@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>DSH Browser</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; height: 58px; background: #0d131a; color: #e6edf3; border-bottom: 1px solid #26303a; overflow: hidden; }
+    .bar { height: 58px; display: flex; align-items: center; gap: 7px; padding: 8px 10px; }
+    button { width: 38px; height: 38px; border: 1px solid #303b46; border-radius: 9px; background: #18212b; color: #e6edf3; cursor: pointer; font-size: 15px; }
+    button:hover:not(:disabled) { background: #222d39; }
+    button:disabled { opacity: .35; cursor: not-allowed; }
+    #external { width: auto; padding: 0 12px; font-size: 12px; }
+    form { flex: 1; display: flex; gap: 7px; min-width: 0; }
+    input { width: 100%; min-width: 0; height: 38px; border: 1px solid #303b46; border-radius: 9px; background: #070b10; color: #e6edf3; padding: 0 12px; outline: none; }
+    input:focus { border-color: #6e7681; }
+    .loading { opacity: .7; }
+  </style>
+</head>
+<body>
+  <div class="bar">
+    <button id="back" title="后退" aria-label="后退">←</button>
+    <button id="forward" title="前进" aria-label="前进">→</button>
+    <button id="reload" title="刷新" aria-label="刷新">↻</button>
+    <button id="home" title="主页" aria-label="主页">⌂</button>
+    <form id="form">
+      <input id="address" autocomplete="off" spellcheck="false" aria-label="网址或搜索内容" placeholder="输入网址或搜索内容">
+    </form>
+    <button id="external" title="使用系统浏览器打开">外部打开</button>
+  </div>
+  <script src="browser-toolbar.js"></script>
+</body>
+</html>
