@@ -25,6 +25,7 @@
     .badge { border: 1px solid #303b46; border-radius: 999px; padding: 4px 9px; }
     .restart { display: none; margin-top: 14px; padding: 12px; border-radius: 10px; background: #2a210d; border: 1px solid #715d21; }
     .restart.visible { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .warning { margin-top: 12px; padding: 11px 12px; border-radius: 10px; background: #26181a; border: 1px solid #633238; color: #e6b8bc; font-size: 12.5px; line-height: 1.6; }
     pre { min-height: 300px; max-height: 430px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; background: #05080c; border-radius: 10px; padding: 14px; color: #b9c4cf; font: 12.5px/1.55 "Cascadia Mono", Consolas, monospace; }
     .hint { font-size: 12.5px; color: #8b949e; line-height: 1.6; margin-top: 10px; }
   </style>
@@ -51,6 +52,7 @@
         <span>插件集合已变化，需要重启 DSH Desktop 才会加载新的 Profile。</span>
         <button id="restart">立即重启</button>
       </div>
+      <div class="warning"><strong>只安装你信任的插件。</strong> DSH 插件属于本地代码扩展，安装后的插件会以 DSH 本地进程权限运行，并可能访问其被授予的文件、网络和工具能力。包名白名单可以阻止命令注入，但不能把不可信插件本身变成安全代码。</div>
       <div class="hint">安全限制：此界面只接受 npm Registry 包名和受限版本格式，不接受 shell 命令、URL、Git 地址或任意参数。底层仍由官方 <code>dsh plugin --profile web</code> 完成 Profile 对账。</div>
     </section>
 
