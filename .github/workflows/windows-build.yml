@@ -31,6 +31,22 @@ jobs:
       - name: Static syntax checks
         run: npm run check
 
+      - name: Validate PowerShell install E2E script
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/verify-installed-app.ps1').Path,
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell install E2E script has $($errors.Count) parse error(s)"
+          }
+          Write-Host '[install-e2e] PowerShell probe parsed successfully'
+
       - name: Build Windows installer
         run: npm run dist
 
@@ -45,327 +61,26 @@ jobs:
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
 
-      - name: Clean-install, first-run, restart, PTY and published-release E2E
+      - name: Clean-install built installer E2E
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $installer -Label built-v050
+          if ($LASTEXITCODE -ne 0) { throw "built installer E2E failed with exit code $LASTEXITCODE" }
 
-          Add-Type @"
-          using System;
-          using System.Runtime.InteropServices;
-          public static class DshWindowProbe {
-            [StructLayout(LayoutKind.Sequential)]
-            public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
-            [DllImport("user32.dll")]
-            public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
-          }
-          "@
-
-          function Get-ProcessTreeSnapshot([int]$RootPid) {
-            $all = @(Get-CimInstance Win32_Process)
-            $ids = @($RootPid)
-            do {
-              $before = $ids.Count
-              foreach ($proc in $all) {
-                $pid = [int]$proc.ProcessId
-                $ppid = [int]$proc.ParentProcessId
-                if (($ids -contains $ppid) -and ($ids -notcontains $pid)) {
-                  $ids += $pid
-                }
-              }
-            } while ($ids.Count -gt $before)
-            [PSCustomObject]@{
-              Ids = @($ids)
-              Processes = @($all | Where-Object { $ids -contains [int]$_.ProcessId })
-              AllProcesses = $all
-            }
-          }
-
-          function Test-LargeDesktopWindow([int]$Pid) {
-            try {
-              $proc = Get-Process -Id $Pid -ErrorAction Stop
-              if ($proc.MainWindowHandle -eq 0) { return $false }
-              $rect = New-Object DshWindowProbe+RECT
-              if (-not [DshWindowProbe]::GetWindowRect($proc.MainWindowHandle, [ref]$rect)) { return $false }
-              $width = $rect.Right - $rect.Left
-              $height = $rect.Bottom - $rect.Top
-              # Splash is only 420x320. The real desktop has minWidth 960 and
-              # minHeight 600, so this rejects a splash-only startup.
-              return ($width -ge 900 -and $height -ge 550)
-            } catch {
-              return $false
-            }
-          }
-
-          function Show-AppDiagnostics([int]$RootPid, [string]$InstallDir) {
-            Write-Host "[install-e2e] diagnostics for PID $RootPid"
-            try {
-              $snapshot = Get-ProcessTreeSnapshot $RootPid
-              foreach ($proc in $snapshot.Processes) {
-                Write-Host ("[process] pid={0} ppid={1} name={2} cmd={3}" -f $proc.ProcessId, $proc.ParentProcessId, $proc.Name, $proc.CommandLine)
-              }
-              $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $snapshot.Ids -contains [int]$_.OwningProcess })
-              foreach ($listener in $listeners) {
-                Write-Host ("[listener] pid={0} {1}:{2}" -f $listener.OwningProcess, $listener.LocalAddress, $listener.LocalPort)
-              }
-            } catch {
-              Write-Host "[diagnostics] process/listener dump failed: $($_.Exception.Message)"
-            }
-
-            foreach ($root in @(Get-ChildItem -Path $env:APPDATA -Directory -ErrorAction SilentlyContinue)) {
-              $log = Join-Path $root.FullName 'bundled-web-ui.log'
-              if (Test-Path $log) {
-                Write-Host "[bundled-web-ui.log] $log"
-                Get-Content $log -Tail 80 | ForEach-Object { Write-Host $_ }
-              }
-            }
-          }
-
-          function Get-ProfilePackageCandidates {
-            $files = @()
-            foreach ($root in @(Get-ChildItem -Path $env:APPDATA -Directory -ErrorAction SilentlyContinue)) {
-              $candidate = Join-Path $root.FullName 'dsh-home\profiles\web\package.json'
-              if (Test-Path $candidate) { $files += $candidate }
-            }
-            return @($files)
-          }
-
-          function Assert-BundledSkinProfile([string]$InstallDir) {
-            $verified = $false
-            $normalizedInstall = $InstallDir.Replace('\', '/')
-            foreach ($profilePackage in @(Get-ProfilePackageCandidates)) {
-              $profile = Get-Content $profilePackage -Raw | ConvertFrom-Json
-              $dep = $null
-              foreach ($section in @('dependencies', 'optionalDependencies', 'devDependencies')) {
-                $obj = $profile.$section
-                if ($obj -and $obj.PSObject.Properties.Name -contains '@linxin666/dsh-skins') {
-                  $dep = [string]$obj.'@linxin666/dsh-skins'
-                  break
-                }
-              }
-              $bundles = @()
-              if ($profile.dsh -and $profile.dsh.profile) {
-                $bundles = @($profile.dsh.profile.bundles)
-              }
-              if (
-                $dep -like 'link:*' -and
-                $dep.Replace('\', '/') -like "link:$normalizedInstall/*" -and
-                $bundles -contains '@linxin666/dsh-skins'
-              ) {
-                Write-Host "[install-e2e] bundled skin active in installed web profile: $profilePackage"
-                $verified = $true
-                break
-              }
-            }
-            if (-not $verified) {
-              throw "bundled skin is not active from the installed local path in the first-run web profile"
-            }
-          }
-
-          function Test-InstalledPty([string]$InstalledExe, [string]$InstallDir, [string]$Label) {
-            $ptyModule = Join-Path $InstallDir 'resources\app.asar.unpacked\node_modules\node-pty'
-            if (-not (Test-Path (Join-Path $ptyModule 'package.json'))) {
-              throw "[$Label] installed node-pty package missing: $ptyModule"
-            }
-            $js = Join-Path $env:RUNNER_TEMP "dsh-pty-probe-$Label.js"
-            $escapedPty = $ptyModule.Replace('\', '\\')
-            @"
-          const pty = require('$escapedPty');
-          const shell = process.env.ComSpec || 'C:\\Windows\\System32\\cmd.exe';
-          let output = '';
-          let done = false;
-          const child = pty.spawn(shell, ['/d', '/s', '/c', 'echo DSH_PTY_OK'], {
-            name: 'xterm-color', cols: 80, rows: 24, cwd: process.cwd(), env: process.env,
-          });
-          child.onData((data) => { output += data; });
-          child.onExit(() => {
-            if (done) return;
-            done = true;
-            process.stdout.write(output);
-            process.exit(output.includes('DSH_PTY_OK') ? 0 : 2);
-          });
-          setTimeout(() => {
-            if (done) return;
-            done = true;
-            process.stderr.write('PTY_TIMEOUT\\n' + output);
-            try { child.kill(); } catch {}
-            process.exit(3);
-          }, 10000);
-          "@ | Set-Content -Path $js -Encoding UTF8
-
-            $oldElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
-            try {
-              $env:ELECTRON_RUN_AS_NODE = '1'
-              & $InstalledExe $js
-              $code = $LASTEXITCODE
-            } finally {
-              if ($null -eq $oldElectronRunAsNode) { Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue }
-              else { $env:ELECTRON_RUN_AS_NODE = $oldElectronRunAsNode }
-              Remove-Item $js -Force -ErrorAction SilentlyContinue
-            }
-            if ($code -ne 0) { throw "[$Label] installed node-pty probe failed with exit code $code" }
-            Write-Host "[install-e2e] [$Label] installed node-pty spawned cmd.exe successfully"
-          }
-
-          function Wait-NormalAppReady([string]$InstalledExe, [string]$InstallDir, [string]$Label, [int]$Attempt) {
-            $stdout = Join-Path $env:RUNNER_TEMP "dsh-$Label-$Attempt.stdout.log"
-            $stderr = Join-Path $env:RUNNER_TEMP "dsh-$Label-$Attempt.stderr.log"
-            Remove-Item $stdout, $stderr -Force -ErrorAction SilentlyContinue
-            $desktop = Start-Process -FilePath $InstalledExe -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-            $deadline = (Get-Date).AddSeconds(120)
-            $windowReady = $false
-            $dshReady = $false
-            $dshSeen = $false
-            $dshPort = $null
-            try {
-              while ((Get-Date) -lt $deadline) {
-                Start-Sleep -Seconds 2
-                $desktop.Refresh()
-                if ($desktop.HasExited) {
-                  throw "[$Label run $Attempt] installed DSH Desktop exited during normal startup with code $($desktop.ExitCode)"
-                }
-
-                $snapshot = Get-ProcessTreeSnapshot $desktop.Id
-                $installRegex = [regex]::Escape($InstallDir)
-                $dshProcesses = @($snapshot.AllProcesses | Where-Object {
-                  $_.CommandLine -and
-                  $_.CommandLine -match $installRegex -and
-                  $_.CommandLine -match '@deepseek-ai[\\/]dsh[\\/]lib[\\/]bin\.js'
-                })
-                if ($dshProcesses.Count -gt 0) { $dshSeen = $true }
-
-                $candidatePorts = @()
-                foreach ($dshProcess in $dshProcesses) {
-                  if ($dshProcess.CommandLine -match '--port(?:=|\s+)["'']?(\d+)') {
-                    $candidatePorts += [int]$Matches[1]
-                  }
-                }
-                $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object {
-                  $snapshot.Ids -contains [int]$_.OwningProcess
-                })
-                foreach ($listener in $listeners) { $candidatePorts += [int]$listener.LocalPort }
-                $candidatePorts = @($candidatePorts | Sort-Object -Unique)
-
-                foreach ($port in $candidatePorts) {
-                  try {
-                    $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 3
-                    if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 400) {
-                      $dshReady = $true
-                      $dshPort = $port
-                      break
-                    }
-                  } catch {
-                    # Non-HTTP listener or service still warming up.
-                  }
-                }
-
-                if ($dshReady) {
-                  # Only accept a large desktop window after the local DSH web
-                  # endpoint is live. This prevents the 420x320 splash window
-                  # from satisfying the UI readiness check.
-                  $windowReady = Test-LargeDesktopWindow $desktop.Id
-                }
-
-                if ($dshSeen -and $dshReady -and $windowReady) { break }
-              }
-
-              if (-not ($dshSeen -and $dshReady -and $windowReady)) {
-                Show-AppDiagnostics $desktop.Id $InstallDir
-                if (Test-Path $stdout) { Write-Host '[stdout]'; Get-Content $stdout -Tail 100 | ForEach-Object { Write-Host $_ } }
-                if (Test-Path $stderr) { Write-Host '[stderr]'; Get-Content $stderr -Tail 100 | ForEach-Object { Write-Host $_ } }
-                throw "[$Label run $Attempt] readiness failed: dshSeen=$dshSeen dshReady=$dshReady windowReady=$windowReady port=$dshPort"
-              }
-
-              Write-Host "[install-e2e] [$Label run $Attempt] bundled DSH reachable on 127.0.0.1:$dshPort"
-              Write-Host "[install-e2e] [$Label run $Attempt] real 960x600-class desktop window detected"
-              return $desktop
-            } catch {
-              if ($desktop -and -not $desktop.HasExited) { & taskkill /PID $desktop.Id /T /F | Out-Host }
-              throw
-            }
-          }
-
-          function Stop-AppTree($desktop) {
-            if ($desktop -and -not $desktop.HasExited) {
-              & taskkill /PID $desktop.Id /T /F | Out-Host
-            }
-            Start-Sleep -Seconds 2
-          }
-
-          function Clear-DshUserData {
-            foreach ($root in @(Get-ChildItem -Path $env:APPDATA -Directory -ErrorAction SilentlyContinue)) {
-              if (Test-Path (Join-Path $root.FullName 'dsh-home')) {
-                Remove-Item $root.FullName -Recurse -Force -ErrorAction SilentlyContinue
-              }
-            }
-            foreach ($candidate in @(
-              (Join-Path $env:APPDATA 'dsh-desktop'),
-              (Join-Path $env:APPDATA 'DSH Desktop')
-            )) {
-              if (Test-Path $candidate) { Remove-Item $candidate -Recurse -Force -ErrorAction SilentlyContinue }
-            }
-          }
-
-          function Test-Installer([string]$InstallerPath, [string]$Label) {
-            if (-not (Test-Path $InstallerPath)) { throw "[$Label] installer not found: $InstallerPath" }
-            $installDir = Join-Path $env:RUNNER_TEMP "dsh-desktop-$Label"
-            if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
-            Clear-DshUserData
-
-            Write-Host "[install-e2e] [$Label] installing $InstallerPath -> $installDir"
-            $install = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$installDir") -PassThru -Wait
-            if ($install.ExitCode -ne 0) { throw "[$Label] NSIS silent install failed with exit code $($install.ExitCode)" }
-
-            $installedExe = Join-Path $installDir 'DSH Desktop.exe'
-            if (-not (Test-Path $installedExe)) { throw "[$Label] installed executable not found: $installedExe" }
-            Write-Host "[install-e2e] [$Label] installed executable exists"
-
-            Test-InstalledPty $installedExe $installDir $Label
-
-            $first = $null
-            $second = $null
-            try {
-              # Run 1 is a true cold first-run: bundled skin reconciliation and
-              # bundled DSH cold start happen with no pre-existing userData.
-              $first = Wait-NormalAppReady $installedExe $installDir $Label 1
-              Assert-BundledSkinProfile $installDir
-              Stop-AppTree $first
-              $first = $null
-
-              # Run 2 verifies persisted profile state and a normal warm restart.
-              $second = Wait-NormalAppReady $installedExe $installDir $Label 2
-              Assert-BundledSkinProfile $installDir
-              Stop-AppTree $second
-              $second = $null
-            } finally {
-              Stop-AppTree $first
-              Stop-AppTree $second
-            }
-
-            $uninstaller = Get-ChildItem -Path $installDir -Filter 'Uninstall*.exe' -File | Select-Object -First 1
-            if (-not $uninstaller) { throw "[$Label] NSIS uninstaller not found after installation" }
-            $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
-            if ($uninstall.ExitCode -ne 0) { throw "[$Label] NSIS silent uninstall failed with exit code $($uninstall.ExitCode)" }
-            Start-Sleep -Seconds 2
-            if (Test-Path $installedExe) { throw "[$Label] installed executable still exists after silent uninstall" }
-            Write-Host "[install-e2e] [$Label] silent uninstall succeeded"
-          }
-
-          $builtInstaller = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
-          Test-Installer $builtInstaller 'built-v050'
-
-          # v0.5.0 was already public before this stricter gate existed. On main,
-          # independently download and test the exact published binary, pinned by
-          # its release SHA-256, so validation cannot silently use a rebuilt file.
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
-            $published = Join-Path $env:RUNNER_TEMP 'DSH-Desktop-Setup-0.5.0-published.exe'
-            Invoke-WebRequest -Uri 'https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.5.0/DSH-Desktop-Setup-0.5.0.exe' -OutFile $published -UseBasicParsing
-            $hash = (Get-FileHash -Path $published -Algorithm SHA256).Hash.ToLowerInvariant()
-            $expected = '1b80baf4b3de9438100d4e360746666fd5d1e9ef01ed83818c83396b277fc88b'
-            if ($hash -ne $expected) { throw "published v0.5.0 SHA-256 mismatch: $hash" }
-            Write-Host "[install-e2e] published v0.5.0 SHA-256 verified: $hash"
-            Test-Installer $published 'published-v050'
-          }
+      - name: Verify exact published v0.5.0 installer
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        run: |
+          $published = Join-Path $env:RUNNER_TEMP 'DSH-Desktop-Setup-0.5.0-published.exe'
+          Invoke-WebRequest -Uri 'https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.5.0/DSH-Desktop-Setup-0.5.0.exe' -OutFile $published -UseBasicParsing
+          $hash = (Get-FileHash -Path $published -Algorithm SHA256).Hash.ToLowerInvariant()
+          $expected = '1b80baf4b3de9438100d4e360746666fd5d1e9ef01ed83818c83396b277fc88b'
+          if ($hash -ne $expected) { throw "published v0.5.0 SHA-256 mismatch: $hash" }
+          Write-Host "[install-e2e] published v0.5.0 SHA-256 verified: $hash"
+          & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $published -Label published-v050
+          if ($LASTEXITCODE -ne 0) { throw "published v0.5.0 E2E failed with exit code $LASTEXITCODE" }
 
       - name: Audit installer and unpacked runtime
         env:
@@ -435,7 +150,7 @@ jobs:
           - 内置 @linxin666/dsh-skins 皮肤中心与皮肤资产，安装 DSH Desktop 后无需再单独下载皮肤插件。
           - 启动时只从安装包本地路径把皮肤包链接到私有 web Profile，不自动拉取 @latest，也不依赖运行时联网。
           - 保留插件管理、内置浏览器、Sites、终端和完整 bundled DSH；SSH、远程控制等高权限 dsh-web-ui 扩展仍作为可选插件，不默认塞进安装包。
-          - CI 验证 NSIS 清洁安装、安装后冷启动、真实主窗口、bundled DSH HTTP、皮肤 Profile、installed node-pty、第二次启动、静默卸载及安装包体积。
+          - 发布门禁验证 NSIS 清洁安装、installed node-pty、冷启动、bundled DSH HTTP、真实主窗口、皮肤 Profile、第二次启动、静默卸载及安装包体积。
           - 相对 v0.4.0 最多允许增长 3 MiB，且绝对上限 125 MiB。
           EOF
           )
