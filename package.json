@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "smoke": "electron . --smoke",
-    "check": "node --check bootstrap.js && node --check bundled-web-ui.js && node --check main.js && node --check preload.js && node --check desktop-extensions.js && node --check plugin-manager-preload.js && node --check plugin-manager.js && node --check browser-preload.js && node --check browser-toolbar.js && node --check sites-preload.js && node --check sites.js && node --check scripts/verify-runtime-closure.js && node --check scripts/verify-packaged-plugin-runtime.js && node --check scripts/package-audit.js && node --check scripts/release.js",
+    "check": "node --check bootstrap.js && node --check bundled-web-ui.js && node --check main.js && node --check preload.js && node --check desktop-extensions.js && node --check plugin-manager-preload.js && node --check plugin-manager.js && node --check browser-preload.js && node --check browser-toolbar.js && node --check sites-preload.js && node --check sites.js && node --check scripts/after-pack.js && node --check scripts/verify-runtime-closure.js && node --check scripts/verify-bundled-skins.js && node --check scripts/verify-packaged-plugin-runtime.js && node --check scripts/package-audit.js && node --check scripts/release.js",
     "verify:packaged-plugin": "node scripts/verify-packaged-plugin-runtime.js",
     "audit:package": "node scripts/package-audit.js",
     "make-icons": "node scripts/make-icon.js",
@@ -22,7 +22,7 @@
     "asarUnpack": [
       "node_modules/**"
     ],
-    "afterPack": "scripts/verify-runtime-closure.js",
+    "afterPack": "scripts/after-pack.js",
     "npmRebuild": false,
     "compression": "maximum",
     "electronLanguages": [
