@@ -1,13 +1,15 @@
 {
   "name": "dsh-desktop",
-  "version": "0.3.0",
-  "description": "DSH Desktop — codex 桌面端风格的 DeepSeek Harness 原生客户端（零配置开箱即用：窗口/会话菜单/托盘/通知/快速发消息/防休眠/内置终端）",
-  "main": "main.js",
+  "version": "0.4.0",
+  "description": "DSH Desktop — DeepSeek Harness 原生客户端（内置 DSH/终端/插件管理/浏览器/Sites，零配置开箱即用）",
+  "main": "bootstrap.js",
   "author": "wuqian",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
     "smoke": "electron . --smoke",
+    "check": "node --check bootstrap.js && node --check main.js && node --check preload.js && node --check desktop-extensions.js && node --check plugin-manager-preload.js && node --check plugin-manager.js && node --check browser-preload.js && node --check browser-toolbar.js && node --check sites-preload.js && node --check sites.js && node --check scripts/verify-runtime-closure.js && node --check scripts/package-audit.js && node --check scripts/release.js",
+    "audit:package": "node scripts/package-audit.js",
     "make-icons": "node scripts/make-icon.js",
     "release": "node scripts/release.js",
     "dist": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis --publish never"
@@ -19,6 +21,7 @@
     "asarUnpack": [
       "node_modules/**"
     ],
+    "afterPack": "scripts/verify-runtime-closure.js",
     "npmRebuild": false,
     "compression": "maximum",
     "electronLanguages": [
@@ -26,12 +29,23 @@
       "en-US"
     ],
     "files": [
+      "bootstrap.js",
       "main.js",
       "preload.js",
+      "desktop-extensions.js",
       "error.html",
       "send-dialog.html",
       "splash.html",
       "terminal.html",
+      "plugin-manager.html",
+      "plugin-manager.js",
+      "plugin-manager-preload.js",
+      "browser-toolbar.html",
+      "browser-toolbar.js",
+      "browser-preload.js",
+      "sites.html",
+      "sites.js",
+      "sites-preload.js",
       "assets/**",
       "node_modules/@xterm/**",
       "!node_modules/**/*.map"
@@ -70,7 +84,8 @@
     "@deepseek-ai/dsh-workflow": "0.1.0-rc.6",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^5.5.0",
-    "node-pty": "^1.1.0"
+    "node-pty": "^1.1.0",
+    "pnpm": "11.17.0"
   },
   "devDependencies": {
     "electron": "^43.4.0",
