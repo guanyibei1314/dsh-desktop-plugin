@@ -58,3 +58,34 @@ jobs:
             dist/latest.yml
           if-no-files-found: error
           retention-days: 7
+
+  publish:
+    # One-time guarded publisher: only a main-branch push whose commit message
+    # deliberately starts with "release:" may replace public Release assets.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-desktop-windows
+          path: dist
+
+      - name: Replace v0.3.0 Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f dist/DSH-Desktop-Setup-0.3.0.exe
+          gh release upload v0.3.0 \
+            dist/DSH-Desktop-Setup-0.3.0.exe \
+            dist/DSH-Desktop-Setup-0.3.0.exe.blockmap \
+            dist/latest.yml \
+            --clobber
+          gh release edit v0.3.0 \
+            --notes $'## DSH Desktop 0.3.0\n\n零配置开箱即用：自动连接本机 DSH；没有则启动内置 DeepSeek Harness。\n\n### 2026-08-16 安全与体积优化\n- 主 DSH Web 页面不再获得 desktop/terminal IPC bridge；PTY/Shell 权限仅暴露给精确匹配的本地终端页。\n- 本地高权限页面增加 CSP。\n- Windows 安装包由约 135.50 MiB 降至约 120.12 MiB（约 -11.35%），保留完整内置 DSH。\n- Windows CI 已完成 npm ci、语法检查与 NSIS 实际构建。'
