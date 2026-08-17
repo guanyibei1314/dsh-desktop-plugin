@@ -76,6 +76,8 @@ async function main() {
   assert.equal(cached.ok, true)
   assert.equal(cached.source, 'cache')
   assert.equal(cached.registry.plugins[0].name, 'Safe UI')
+  assert.equal(cached.registry.plugins[0].packageName, '@example/dsh-safe-ui')
+  assert.equal(cached.registry.plugins[0].installable, true)
   assert.match(cached.error, /offline/)
 
   fs.rmSync(dir, { recursive: true, force: true })
