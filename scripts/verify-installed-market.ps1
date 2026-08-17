@@ -26,11 +26,14 @@ $probe = Join-Path $env:RUNNER_TEMP "dsh-market-probe-$Label.js"
 $marketModule = (Join-Path $installDir 'resources\app.asar\plugin-market.js').Replace('\', '/')
 $securityModule = (Join-Path $installDir 'resources\app.asar\plugin-security.js').Replace('\', '/')
 $cacheFile = (Join-Path $env:RUNNER_TEMP "dsh-market-cache-$Label.json").Replace('\', '/')
+$marketLiteral = ConvertTo-Json $marketModule -Compress
+$securityLiteral = ConvertTo-Json $securityModule -Compress
+$cacheLiteral = ConvertTo-Json $cacheFile -Compress
 $probeSource = @"
-const market = require(${marketModule@Q});
-const security = require(${securityModule@Q});
+const market = require($marketLiteral);
+const security = require($securityLiteral);
 (async () => {
-  const result = await market.loadPluginCatalog(${cacheFile@Q});
+  const result = await market.loadPluginCatalog($cacheLiteral);
   if (!result || result.source !== 'live') throw new Error('live registry unavailable: ' + JSON.stringify(result));
   if (!result.registry || !Array.isArray(result.registry.plugins) || result.registry.plugins.length < 100) throw new Error('live registry unexpectedly small');
   const sample = result.registry.plugins.find((p) => p && p.installable && p.packageName && !p.deprecated);
