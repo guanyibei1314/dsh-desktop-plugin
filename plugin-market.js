@@ -6,6 +6,7 @@ const path = require('path')
 const REGISTRY_URL = 'https://awesome-dsh-plugin.com/plugins.json'
 const MAX_BODY_BYTES = 8 * 1024 * 1024
 const FETCH_TIMEOUT_MS = 6000
+const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor'])
 
 function packageNamePattern() {
   const atom = '[a-z0-9][a-z0-9._-]*'
@@ -19,6 +20,12 @@ function isPackageName(value) {
 function text(value, max = 800) {
   if (typeof value !== 'string') return ''
   return value.trim().slice(0, max)
+}
+
+function safeCategoryId(value) {
+  const id = text(value, 80)
+  if (!id || RESERVED_KEYS.has(id.toLowerCase())) return ''
+  return /^[a-z0-9][a-z0-9._-]*$/i.test(id) ? id : ''
 }
 
 function safeHttpsUrl(value) {
@@ -48,7 +55,7 @@ function normalizeRegistry(payload) {
   const categories = {}
   if (payload.categories && typeof payload.categories === 'object' && !Array.isArray(payload.categories)) {
     for (const [key, value] of Object.entries(payload.categories)) {
-      const id = text(key, 80)
+      const id = safeCategoryId(key)
       if (!id) continue
       const label = localized(value)
       categories[id] = { zh: label.zh || id, en: label.en || id }
@@ -75,7 +82,7 @@ function normalizeRegistry(payload) {
       packageName,
       owner,
       url: safeHttpsUrl(raw.url),
-      category: text(raw.category, 80) || 'other',
+      category: safeCategoryId(raw.category) || 'other',
       description,
       stars: Number.isFinite(starsNumber) && starsNumber >= 0 ? Math.floor(starsNumber) : null,
       added: text(raw.added, 40),
@@ -126,7 +133,9 @@ async function fetchRegistry(fetchImpl = globalThis.fetch) {
   try {
     const response = await fetchImpl(REGISTRY_URL, {
       method: 'GET',
-      redirect: 'follow',
+      // Never follow a catalog-controlled redirect. The endpoint is pinned so
+      // a compromised response cannot turn Desktop into an SSRF client.
+      redirect: 'manual',
       signal: controller.signal,
       headers: {
         accept: 'application/json',
@@ -207,4 +216,5 @@ module.exports = {
   loadPluginCatalog,
   normalizeRegistry,
   readCache,
+  safeCategoryId,
 }

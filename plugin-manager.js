@@ -27,6 +27,8 @@ let registry = { categories: {}, plugins: [], updated: '' }
 let installed = new Set()
 let running = false
 let disposers = []
+const securityResults = new Map()
+const securityBusy = new Set()
 
 function append(text) {
   if (output.textContent === '等待操作…') output.textContent = ''
@@ -58,6 +60,17 @@ function categoryLabel(id) {
 function localizedDescription(plugin) {
   const desc = plugin && plugin.description
   return (desc && (desc.zh || desc.en)) || '暂无描述。'
+}
+
+function riskLabel(level) {
+  const labels = {
+    low: '低风险',
+    medium: '中风险',
+    high: '高风险',
+    critical: '严重风险',
+    unknown: '无法评估',
+  }
+  return labels[level] || '未评估'
 }
 
 function rebuildCategories() {
@@ -117,8 +130,39 @@ function makeButton(label, className, disabled, onClick) {
   return button
 }
 
+function appendSecurityBox(card, plugin) {
+  if (!plugin.packageName) return
+  const result = securityResults.get(plugin.packageName)
+  if (!result) return
+  const assessment = result.assessment || {}
+  const box = document.createElement('div')
+  box.className = 'security'
+  const title = document.createElement('strong')
+  const version = result.metadata && result.metadata.latestVersion ? ` · ${result.metadata.latestVersion}` : ''
+  title.textContent = `安全预检：${riskLabel(assessment.level)} · ${assessment.score === undefined ? '--' : assessment.score}/100${version}`
+  box.appendChild(title)
+
+  const reasons = Array.isArray(assessment.reasons) ? assessment.reasons.slice(0, 4) : []
+  if (reasons.length) {
+    const list = document.createElement('ul')
+    for (const reason of reasons) {
+      const item = document.createElement('li')
+      item.textContent = reason
+      list.appendChild(item)
+    }
+    box.appendChild(list)
+  } else {
+    const note = document.createElement('div')
+    note.textContent = '当前预检未发现显著风险信号。'
+    box.appendChild(note)
+  }
+  card.appendChild(box)
+}
+
 function renderCard(plugin) {
   const isInstalled = !!plugin.packageName && installed.has(plugin.packageName)
+  const security = plugin.packageName ? securityResults.get(plugin.packageName) : null
+  const assessment = security && security.assessment
   const card = document.createElement('article')
   card.className = `card${isInstalled ? ' installed' : ''}${plugin.deprecated ? ' deprecated' : ''}`
 
@@ -151,6 +195,7 @@ function renderCard(plugin) {
   if (plugin.owner) meta.appendChild(makePill(`作者 ${plugin.owner}`))
   if (plugin.stars !== null && plugin.stars !== undefined) meta.appendChild(makePill(`★ ${plugin.stars}`))
   if (plugin.added) meta.appendChild(makePill(`收录 ${plugin.added}`))
+  if (assessment) meta.appendChild(makePill(`安全 ${riskLabel(assessment.level)}`, `risk-${assessment.level}`))
   card.appendChild(meta)
 
   if (plugin.deprecated && plugin.replacement) {
@@ -160,6 +205,8 @@ function renderCard(plugin) {
     card.appendChild(deprecatedNote)
   }
 
+  appendSecurityBox(card, plugin)
+
   const actions = document.createElement('div')
   actions.className = 'actions'
   if (!plugin.installable) {
@@ -167,11 +214,15 @@ function renderCard(plugin) {
     note.className = 'note'
     note.textContent = '该条目没有安全的 npm 包名，桌面端暂不提供一键安装。'
     actions.appendChild(note)
-  } else if (isInstalled) {
-    actions.appendChild(makeButton('升级', '', running, () => runAction('update', plugin.packageName)))
-    actions.appendChild(makeButton('卸载', 'danger', running, () => runAction('remove', plugin.packageName)))
   } else {
-    actions.appendChild(makeButton('安装', 'primary', running || plugin.deprecated, () => runAction('install', plugin.packageName)))
+    const assessing = securityBusy.has(plugin.packageName)
+    actions.appendChild(makeButton(assessing ? '评估中…' : '安全评估', '', running || assessing, () => assessPackage(plugin.packageName, true)))
+    if (isInstalled) {
+      actions.appendChild(makeButton('升级', '', running || assessing, () => runMarketAction('update', plugin.packageName)))
+      actions.appendChild(makeButton('卸载', 'danger', running, () => runAction('remove', plugin.packageName)))
+    } else {
+      actions.appendChild(makeButton('安装', 'primary', running || assessing || plugin.deprecated, () => runMarketAction('install', plugin.packageName)))
+    }
   }
   card.appendChild(actions)
   return card
@@ -207,6 +258,7 @@ async function loadMarket() {
   try {
     const result = await bridge.catalog()
     registry = (result && result.registry) || { categories: {}, plugins: [], updated: '' }
+    securityResults.clear()
     rebuildCategories()
     if (result && result.source === 'live') {
       source.textContent = '目录：实时'
@@ -231,13 +283,73 @@ async function loadMarket() {
   }
 }
 
+async function assessPackage(packageName, logResult) {
+  if (!bridge || running || securityBusy.has(packageName)) return securityResults.get(packageName) || null
+  securityBusy.add(packageName)
+  render()
+  try {
+    const result = await bridge.security(packageName)
+    securityResults.set(packageName, result)
+    if (logResult) {
+      const assessment = result && result.assessment
+      append(`\n[安全预检] ${packageName}: ${riskLabel(assessment && assessment.level)}，风险分 ${assessment && assessment.score !== undefined ? assessment.score : '--'}/100。\n`)
+      if (assessment && Array.isArray(assessment.reasons)) {
+        for (const reason of assessment.reasons.slice(0, 5)) append(`- ${reason}\n`)
+      }
+    }
+    return result
+  } catch (error) {
+    const failed = {
+      ok: false,
+      assessment: {
+        score: 100,
+        level: 'unknown',
+        blocked: true,
+        requiresConfirmation: false,
+        reasons: [`无法完成实时安全评估：${error && error.message ? error.message : String(error)}`],
+      },
+    }
+    securityResults.set(packageName, failed)
+    if (logResult) append(`\n[安全预检] ${packageName}: 无法评估，已阻止市场一键安装。\n`)
+    return failed
+  } finally {
+    securityBusy.delete(packageName)
+    render()
+  }
+}
+
+async function securityGate(packageName) {
+  // Always refresh immediately before an install/update. A previous green
+  // badge is informational only and cannot be replayed to bypass the gate.
+  securityResults.delete(packageName)
+  const result = await assessPackage(packageName, true)
+  const assessment = result && result.assessment
+  if (!assessment || assessment.blocked) {
+    append(`\n已阻止：${packageName} 未通过市场安全门禁。可查看风险原因；高级手动入口仍保留给明确了解风险的用户。\n`)
+    return false
+  }
+  if (assessment.requiresConfirmation) {
+    const reasons = Array.isArray(assessment.reasons) ? assessment.reasons.slice(0, 4).join('\n• ') : ''
+    return window.confirm(`插件 ${packageName} 被评为高风险（${assessment.score}/100）。\n\n• ${reasons}\n\n仍要继续吗？`)
+  }
+  return true
+}
+
+async function runMarketAction(action, spec) {
+  if (action === 'install' || action === 'update') {
+    const allowed = await securityGate(spec)
+    if (!allowed) return
+  }
+  return runAction(action, spec)
+}
+
 async function runAction(action, spec) {
   if (!bridge || running) return
   if (!spec) return
-  output.textContent = ''
+  if (output.textContent === '等待操作…') output.textContent = ''
   setRunning(true)
   const labels = { install: '安装', update: '升级', remove: '卸载' }
-  append(`> ${labels[action] || action} ${spec}\n\n`)
+  append(`\n> ${labels[action] || action} ${spec}\n\n`)
   try {
     const result = await bridge.run(action, spec)
     if (result && result.needsRestart) setRestart(true)
