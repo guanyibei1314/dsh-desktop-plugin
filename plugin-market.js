@@ -61,7 +61,7 @@ function normalizeRegistry(payload) {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue
     const name = text(raw.name, 180)
     if (!name) continue
-    const npm = text(raw.npm, 214)
+    const npm = text(raw.npm || raw.packageName, 214)
     const packageName = isPackageName(npm) ? npm : ''
     const owner = text(raw.owner, 120)
     const key = `${name}\n${packageName}\n${owner}`.toLowerCase()
