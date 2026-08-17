@@ -5,6 +5,7 @@ const path = require('path')
 const { pathToFileURL } = require('url')
 const { app, ipcMain } = require('electron')
 const { isPackageName, loadPluginCatalog } = require('./plugin-market')
+const { assessPackageSecurity } = require('./plugin-security')
 
 let registered = false
 
@@ -52,6 +53,14 @@ function registerPluginMarketIpc() {
   ipcMain.handle('plugin:installed', (event) => {
     if (!isAuthorizedSender(event)) throw new Error('unauthorized sender')
     return installedPackages()
+  })
+  ipcMain.handle('plugin:security', async (event, rawPackageName) => {
+    if (!isAuthorizedSender(event)) throw new Error('unauthorized sender')
+    const packageName = String(rawPackageName || '').trim()
+    if (!isPackageName(packageName)) throw new Error('非法 npm 包名。')
+    // Intentionally no long-lived cache: every explicit assessment and every
+    // one-click install/update receives a fresh npm + OSV preflight.
+    return assessPackageSecurity(packageName)
   })
 }
 
