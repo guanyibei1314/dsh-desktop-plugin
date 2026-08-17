@@ -2,11 +2,13 @@
 
 const { app } = require('electron')
 const desktopExtensions = require('./desktop-extensions')
+const { registerPluginMarketIpc } = require('./plugin-market-ipc')
 const { ensureBundledWebUi } = require('./bundled-web-ui')
 
 // Desktop-owned capability windows are registered before the DSH renderer is
 // created so their IPC stays isolated from the remote/local DSH Web page.
 desktopExtensions.registerDesktopExtensions()
+registerPluginMarketIpc()
 
 async function boot() {
   // The skin bundle is physically shipped inside the installer. Reconcile it
