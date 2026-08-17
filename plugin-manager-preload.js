@@ -10,6 +10,7 @@ function subscribe(channel, callback) {
 }
 
 contextBridge.exposeInMainWorld('pluginBridge', {
+  catalog: () => ipcRenderer.invoke('plugin:catalog'),
   list: () => ipcRenderer.invoke('plugin:list'),
   run: (action, spec) => ipcRenderer.invoke('plugin:run', { action, spec }),
   cancel: () => ipcRenderer.invoke('plugin:cancel'),
