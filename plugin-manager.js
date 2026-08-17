@@ -190,8 +190,8 @@ function render() {
 async function refreshInstalled(options = {}) {
   if (!bridge || running) return
   try {
-    const result = await bridge.list()
-    installed = new Set(Array.isArray(result && result.installed) ? result.installed : [])
+    const result = await bridge.installed()
+    installed = new Set(Array.isArray(result) ? result : [])
     if (options.log !== false) append(`\n已刷新本地插件：${installed.size} 个。\n`)
     render()
   } catch (error) {
