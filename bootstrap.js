@@ -2,6 +2,7 @@
 
 const { app } = require('electron')
 const runtimeManager = require('./runtime-manager')
+const runtimeControl = require('./runtime-control')
 
 // Redirect every desktop-owned DSH CLI spawn (main service, plugin manager and
 // bundled skin reconciliation) through one validated runtime selected for this
@@ -12,11 +13,13 @@ const RUNTIME_UPDATE_SMOKE = process.argv.includes('--runtime-update-smoke')
 const SMOKE = process.argv.includes('--smoke')
 
 if (!RUNTIME_UPDATE_SMOKE) {
+  const { registerRuntimeSettings } = require('./runtime-settings-window')
   const desktopExtensions = require('./desktop-extensions')
   const { registerPluginMarketIpc } = require('./plugin-market-ipc')
 
-  // Desktop-owned capability windows are registered before the DSH renderer is
-  // created so their IPC stays isolated from the remote/local DSH Web page.
+  // Register the Runtime settings menu first. Desktop extensions wrap the same
+  // menu builder afterwards; both patches preserve the local-only IPC boundary.
+  registerRuntimeSettings()
   desktopExtensions.registerDesktopExtensions()
   registerPluginMarketIpc()
 }
@@ -28,6 +31,10 @@ async function boot() {
   if (!SMOKE) {
     try {
       await runtimeManager.prepareRuntimeBeforeBoot()
+      const maintenance = runtimeControl.runMaintenance()
+      if (maintenance.smoke.removed.length || maintenance.runtimes.removed.length) {
+        console.log('[runtime-maintenance]', maintenance)
+      }
     } catch (err) {
       console.error('[runtime-manager]', err && err.stack ? err.stack : err)
     }
@@ -48,7 +55,7 @@ async function boot() {
   }
 
   require('./main.js')
-  if (!SMOKE) runtimeManager.scheduleAutoUpdate()
+  if (!SMOKE) runtimeControl.startAutoUpdates()
 }
 
 async function runtimeUpdateSmoke() {
