@@ -1,7 +1,7 @@
 # DSH Desktop 交接文档
 
 > 最后更新：2026-08-18  
-> 目标正式版本：`v0.9.0`  
+> 当前正式版本：`v0.9.0`  
 > 仓库：`guanyibei1314/dsh-desktop-plugin`
 
 ## 1. 当前状态
@@ -31,7 +31,19 @@ release trigger:
 e86ce084afcace6d50c6fb636d762ea989cab78a
 ```
 
-正式 `v0.9.0` tag / Release 只能在 `release: v0.9.0` 的 main Windows workflow 再次完整通过后判定完成。最终安装包 SHA-256 只认 Release Notes 与同名 `.exe.sha256` asset。
+正式 `v0.9.0` tag 已生成，并已核对与 `release: v0.9.0` 提交 `e86ce084afcace6d50c6fb636d762ea989cab78a` **完全一致**。该 tag 只会由正式发布 workflow 在 Windows build 全门禁成功后的 publish 路径创建。最终安装包 SHA-256 只认 Release Notes 与同名 `.exe.sha256` asset。
+
+正式下载入口：
+
+```text
+https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.9.0/DSH-Desktop-Setup-0.9.0.exe
+```
+
+Release 页面：
+
+```text
+https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.9.0
+```
 
 ## 2. v0.9.0 完整工具链
 
@@ -229,7 +241,7 @@ Windows build #64：**success**。
 23. installer SHA-256 generation
 24. artifact upload
 
-正式 Release 还会对 `release: v0.9.0` 再跑同一套门禁；PR success 不能代替正式 Release success。
+正式 `v0.9.0` tag 已建立并与 release trigger 完全一致，说明正式 publish 路径已经在 release workflow 的 build 门禁之后执行。正式 EXE hash 不在交接文档重复手抄，避免与 `.sha256` asset 漂移。
 
 ## 8. v0.8.0 核心能力仍保持
 
