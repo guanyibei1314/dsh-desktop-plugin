@@ -1,7 +1,7 @@
 # DSH Desktop 交接文档
 
 > 最后更新：2026-08-18  
-> 目标正式版本：`v0.8.0`  
+> 当前正式版本：`v0.8.0`  
 > 仓库：`guanyibei1314/dsh-desktop-plugin`
 
 ## 1. 当前状态
@@ -24,7 +24,19 @@ release trigger:
 e26cc388a7dc9ff41aa0182011cd5acfd1fc1c5f
 ```
 
-正式 `v0.8.0` Release 必须由 `release: v0.8.0` 的 main workflow 再次完整验证后生成。最终安装包 SHA-256 只能以正式 Release 的 `.sha256` asset / Release Notes 为准。
+正式 `v0.8.0` tag 已生成，并已核对与发布触发提交 `e26cc388a7dc9ff41aa0182011cd5acfd1fc1c5f` 完全一致。发布流程在创建 Release 前会对最终 EXE 的 `.sha256` 执行 `sha256sum -c`；正式安装包 SHA-256 以 Release Notes 与同名 `.exe.sha256` asset 为唯一权威值，不使用 PR artifact digest 代替。
+
+正式下载入口：
+
+```text
+https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.8.0/DSH-Desktop-Setup-0.8.0.exe
+```
+
+Release 页面：
+
+```text
+https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.8.0
+```
 
 ## 2. v0.8.0 核心新增
 
@@ -123,7 +135,7 @@ Windows CI / Release 流程现在：
   -> Release asset + Release Notes
 ```
 
-不要再把 GitHub Actions artifact ZIP digest 当作 Release EXE SHA-256。
+不要再把 GitHub Actions artifact ZIP digest 当作 Release EXE SHA-256。正式哈希不在交接文档中手工复制，避免文档漂移；以每个版本 Release Notes 和 `.exe.sha256` asset 为准。
 
 ## 3. 既有核心能力仍保持
 
@@ -227,7 +239,7 @@ Windows build #58：**success**。
 19. installer SHA-256 generation
 20. artifact upload
 
-正式 Release 仍会再次跑同一套门禁，不能用 PR success 替代正式发布结论。
+正式发布 tag 已建立，且 tag 与 `release: v0.8.0` 提交完全一致。发布流程只会在相同 Windows 全链路 build 成功后进入 publish；publish 会使用该 build 的已验证 artifact，而不是重新构建一份未测试安装包。
 
 ## 5. v0.8.0 新维护测试的关键断言
 
@@ -256,6 +268,10 @@ Runtime root/smoke-home/old-probe/runtime-link
 ### blocked 状态可视化
 
 第一版 GUI 虽然拿到了 `blockedVersions`，但主卡片没有显示。最终版已增加 Blocked 数量 / 最近 blocked 版本摘要，并在存在 blocked Runtime 时显示 warning。
+
+### settings.json 持久化覆盖审查
+
+Runtime GUI 保存设置时会基于当前 `settings.json` 合并写入；主窗口已有的 `saveSettings()` 同样每次先重新读取磁盘再 merge patch，因此不会因为主窗口后续保存窗口大小、主题等配置而把 Runtime 通道/自动更新设置覆盖掉。
 
 ## 7. 安全边界
 
@@ -313,7 +329,7 @@ Runtime root/smoke-home/old-probe/runtime-link
 
 - junction-aware smoke cleanup：完成；
 - managed Runtime GC：完成；
-- 正式 EXE SHA-256 release chain：完成实现，待正式 v0.8.0 workflow 生成最终值；
+- 正式 EXE SHA-256 release chain：完成，正式值随 Release Notes + `.exe.sha256` asset 发布；
 - **Linux 发布链：按用户要求不做**；
 - macOS 正式发布链仍属后续独立范围。
 
