@@ -27,7 +27,10 @@
 
   ${If} "$8" == "1"
     DetailPrint "Installing full Node.js LTS 24.19.0 and registering PATH..."
-    ExecWait '"$SYSDIR\msiexec.exe" /i "$PLUGINSDIR\${DSH_NODE_INSTALLER}" /passive /norestart ADDLOCAL=ALL' $0
+    ; Use the official MSI default feature selection: Node runtime, npm/core
+    ; components and PATH integration. Do not force ADDLOCAL=ALL because the
+    ; optional native-module build-tools flow can pull in Python/Visual Studio.
+    ExecWait '"$SYSDIR\msiexec.exe" /i "$PLUGINSDIR\${DSH_NODE_INSTALLER}" /passive /norestart' $0
     ${If} "$0" != "0"
       ${If} "$0" != "3010"
         MessageBox MB_ICONSTOP|MB_OK "Node.js installation failed (exit code $0). DSH Desktop setup will stop so the machine is not left in a partially configured state."
