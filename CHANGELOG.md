@@ -12,6 +12,7 @@
 - PR #10 候选安装包为 `226,818,745 bytes = 216.31 MiB`，相对 v0.8.0 比较基线增加约 `92.17 MiB`；CI 继续保留 **230 MiB 绝对硬上限**与 110 MiB 单版本增长门禁。
 - v0.8.0 的 Runtime GUI、安全自动更新、junction-aware 清理、Runtime GC、实时插件市场、Skin Center 与红蓝安全门禁全部保留。
 - PR #10 merge commit：`476d22021c7d7f34cc51cc0f71f98aa2ccd124bb`；正式发布触发：`e86ce084afcace6d50c6fb636d762ea989cab78a` (`release: v0.9.0`)。
+- 正式 `v0.9.0` tag 已生成，并核对与上述 release trigger commit 完全一致。
 - 正式安装包 SHA-256 继续以 Release Notes 与同名 `.exe.sha256` asset 为唯一权威值，不使用 PR 候选 hash 或 Actions artifact ZIP digest 代替。
 - macOS / Linux 正式发布链不在本版本范围。
 
