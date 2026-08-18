@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -25,11 +25,35 @@ jobs:
           node-version: '24'
           cache: npm
 
+      # v0.7.0 changes the official DSH family from rc.6 to rc.7. This temporary
+      # candidate step regenerates the lock so the exact registry integrity tree
+      # can be reviewed and committed before the final release gate returns to
+      # strict npm ci only.
+      - name: Refresh candidate package lock
+        run: npm install --package-lock-only --ignore-scripts
+
       - name: Install dependencies
         run: npm ci
 
+      - name: Upload refreshed package lock
+        uses: actions/upload-artifact@v4
+        with:
+          name: refreshed-package-lock
+          path: package-lock.json
+          if-no-files-found: error
+          retention-days: 2
+
       - name: Static syntax checks
         run: npm run check
+
+      - name: DSH runtime updater functional tests
+        run: npm run test:runtime-update
+
+      - name: DSH runtime updater red-blue security tests
+        run: npm run test:runtime-update-security
+
+      - name: Verify bundled DSH equals official stable release
+        run: npm run verify:official-dsh
 
       - name: Plugin market functional tests
         run: npm run test:market
@@ -40,7 +64,7 @@ jobs:
       - name: Validate PowerShell E2E scripts
         shell: pwsh
         run: |
-          foreach ($script in @('scripts/verify-installed-app.ps1', 'scripts/verify-installed-market.ps1')) {
+          foreach ($script in @('scripts/verify-installed-app.ps1', 'scripts/verify-installed-market.ps1', 'scripts/verify-installed-runtime-update.ps1')) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -68,6 +92,14 @@ jobs:
 
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
+
+      - name: Verify installed official DSH runtime update chain
+        shell: pwsh
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          & pwsh -NoProfile -File scripts/verify-installed-runtime-update.ps1 -InstallerPath $installer -Label official-runtime
+          if ($LASTEXITCODE -ne 0) { throw "installed runtime updater E2E failed with exit code $LASTEXITCODE" }
 
       - name: Verify installed live market and security preflight
         shell: pwsh
@@ -118,8 +150,8 @@ jobs:
           retention-days: 7
 
   publish:
-    # Public release only after every static, red-blue, live-market and repeated
-    # installed-app gate in the build job succeeds.
+    # Public release only after the official-runtime update chain, red-blue
+    # gates, live plugin market/security gate and repeated installed-app E2E all pass.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -155,14 +187,16 @@ jobs:
           零配置 DeepSeek Harness 桌面端。
 
           ### 本版重点
-          - 原生实时 DSH 插件市场：每次打开/刷新请求社区目录，断网时才回退最近一次本地缓存。
-          - 搜索、分类、热门/最新、已安装筛选，以及 npm 插件一键安装、升级和卸载。
-          - 安装/升级前实时安全预检：npm 发布元数据、安装期脚本、维护者、完整性摘要、发布时间、依赖规模和 OSV 已知漏洞。
-          - Critical 或无法评估的插件阻止市场一键安装；High 风险要求再次确认。安全评分属于风险预检，不代表绝对安全保证。
-          - 市场端点固定、拒绝 HTTP 重定向、过滤危险分类键；非 npm / URL / Git / shell 输入不会进入一键安装链路。
-          - 红蓝对抗测试覆盖恶意目录数据、XSS sink、原型污染、重定向、命令注入与 fail-closed 安全门禁。
-          - 发布门禁额外验证安装后的实时市场 + 安全评估链路，并连续执行 3 轮 NSIS 清洁安装、冷启动、二次启动和静默卸载。
-          - 继续内置 @linxin666/dsh-skins / Skin Center；高权限扩展仍按需安装，不默认增肥安装包。
+          - 内置 DeepSeek 官方最新稳定 DSH Runtime，并在发布时实时校验 npm 官方 latest，避免安装包出厂即落后。
+          - 新增独立 DSH Runtime 自动更新：默认每天检查官方 npm Registry，新版不会覆盖 app.asar 或安装目录。
+          - 更新包固定官方 registry、校验 sha512 integrity、禁用全部安装期脚本，并查询 OSV；安全检查不可用时 fail-closed。
+          - 新 Runtime 先在隔离 DSH_HOME 启动真实 Web 服务自检；下次启动再用用户真实 Profile 做兼容性预检，通过才激活。
+          - 激活失败自动保留上一版/安装包内 Runtime，不破坏现有 Profile；更新完成不会强制中断正在运行的会话。
+          - stable 通道默认跟随 npm latest；latest 通道可选择更高的 npm next（若官方提供）。
+          - 主 Harness、插件管理、内置皮肤注册统一走同一个已验证 Runtime，避免 CLI 与服务版本漂移。
+          - 新增 Runtime 红蓝测试，覆盖恶意版本号、非官方 tarball、HTTP/凭据 URL、错误 integrity、生命周期脚本与原型污染数据。
+          - 发布门禁实际安装正式候选包，从官方 Registry 下载 Runtime、做 OSV/integrity 校验、启动 HTTP、自检并激活；随后继续跑插件市场和 3 轮完整安装/双启动/卸载 E2E。
+          - 保留 v0.6.0 的实时插件市场与安装前安全预检，以及 @linxin666/dsh-skins / Skin Center。
           EOF
           )
 
