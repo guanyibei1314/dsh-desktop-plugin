@@ -3,19 +3,21 @@ name: Windows build
 on:
   pull_request:
     branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  sync-lock:
+  build:
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 75
+
     steps:
-      - name: Checkout feature head
+      - name: Checkout
         uses: actions/checkout@v4
-        with:
-          ref: ${{ github.head_ref }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -23,19 +25,192 @@ jobs:
           node-version: '24'
           cache: npm
 
-      - name: Regenerate exact official dependency lock
-        run: npm install --package-lock-only --ignore-scripts
+      - name: Install dependencies from committed lock
+        run: npm ci
 
-      - name: Commit package lock to PR branch
+      - name: Static syntax checks
+        run: npm run check
+
+      - name: DSH runtime updater functional tests
+        run: npm run test:runtime-update
+
+      - name: DSH runtime updater red-blue security tests
+        run: npm run test:runtime-update-security
+
+      - name: Verify bundled DSH equals official stable release
+        run: npm run verify:official-dsh
+
+      - name: Fast source runtime download and activation probe
         shell: pwsh
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package-lock.json
-          if (git diff --cached --quiet) {
-            Write-Host '[lock-sync] package-lock.json already current'
-            exit 0
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-probe'
+          $dshHome = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-home'
+          foreach ($dir in @($runtimeRoot, $dshHome)) {
+            if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
           }
-          git commit -m "chore: sync package lock for DSH rc.7"
-          git push origin "HEAD:${{ github.head_ref }}"
-          Write-Host '[lock-sync] committed exact rc.7 dependency lock'
+          $env:DSH_DESKTOP_RUNTIME_ROOT = $runtimeRoot
+          $env:DSH_DESKTOP_DSH_HOME = $dshHome
+          $env:DSH_RUNTIME_AUTO_UPDATE = '0'
+          & node_modules/.bin/electron.cmd . --runtime-update-smoke
+          $exit = $LASTEXITCODE
+          if (Test-Path (Join-Path $runtimeRoot 'state.json')) {
+            Write-Host '[source-runtime-probe] ----- state.json -----'
+            Get-Content (Join-Path $runtimeRoot 'state.json') | ForEach-Object { Write-Host $_ }
+          }
+          if (Test-Path (Join-Path $runtimeRoot 'runtime-update.log')) {
+            Write-Host '[source-runtime-probe] ----- runtime-update.log -----'
+            Get-Content (Join-Path $runtimeRoot 'runtime-update.log') | ForEach-Object { Write-Host $_ }
+          }
+          if ($exit -ne 0) { throw "source runtime update probe failed with exit code $exit" }
+
+      - name: Plugin market functional tests
+        run: npm run test:market
+
+      - name: Plugin market red-blue security tests
+        run: npm run test:market-security
+
+      - name: Validate PowerShell E2E scripts
+        shell: pwsh
+        run: |
+          foreach ($script in @('scripts/verify-installed-app.ps1', 'scripts/verify-installed-market.ps1', 'scripts/verify-installed-runtime-update.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script).Path,
+              [ref]$tokens,
+              [ref]$errors
+            )
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$script : $($_.Message)" }
+              throw "$script has $($errors.Count) parse error(s)"
+            }
+            Write-Host "[e2e-parse] $script parsed successfully"
+          }
+
+      - name: Build Windows installer
+        run: npm run dist
+
+      - name: Smoke test packaged application
+        shell: pwsh
+        run: |
+          $app = "dist/win-unpacked/DSH Desktop.exe"
+          if (-not (Test-Path $app)) { throw "packaged app not found: $app" }
+          $process = Start-Process -FilePath $app -ArgumentList "--smoke" -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "packaged smoke failed with exit code $($process.ExitCode)" }
+
+      - name: Verify packaged plugin runtime and offline bundled skins
+        run: npm run verify:packaged-plugin
+
+      - name: Verify installed official DSH runtime update chain
+        shell: pwsh
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          & pwsh -NoProfile -File scripts/verify-installed-runtime-update.ps1 -InstallerPath $installer -Label official-runtime
+          if ($LASTEXITCODE -ne 0) { throw "installed runtime updater E2E failed with exit code $LASTEXITCODE" }
+
+      - name: Verify installed live market and security preflight
+        shell: pwsh
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          & pwsh -NoProfile -File scripts/verify-installed-market.ps1 -InstallerPath $installer -Label live-security
+          if ($LASTEXITCODE -ne 0) { throw "installed market/security E2E failed with exit code $LASTEXITCODE" }
+
+      - name: Three-round clean-install cold-start restart E2E
+        shell: pwsh
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          foreach ($round in 1..3) {
+            $label = "release-candidate-$round"
+            Write-Host "[release-gate] starting full chain round $round/3"
+            & pwsh -NoProfile -File scripts/verify-installed-app.ps1 -InstallerPath $installer -Label $label
+            if ($LASTEXITCODE -ne 0) { throw "release candidate E2E round $round failed with exit code $LASTEXITCODE" }
+          }
+
+      - name: Audit installer and unpacked runtime
+        env:
+          DSH_MAX_INSTALLER_MIB: '125'
+          DSH_BASELINE_INSTALLER_BYTES: '126499002'
+          DSH_MAX_INSTALLER_GROWTH_MIB: '3'
+        run: npm run audit:package
+
+      - name: Report installer size
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installer not found" }
+          $mib = [math]::Round($exe.Length / 1MB, 2)
+          Write-Host "INSTALLER_PATH=$($exe.FullName)"
+          Write-Host "INSTALLER_BYTES=$($exe.Length)"
+          Write-Host "INSTALLER_MIB=$mib"
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dsh-desktop-windows
+          path: |
+            dist/DSH-Desktop-Setup-*.exe
+            dist/DSH-Desktop-Setup-*.exe.blockmap
+            dist/latest.yml
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    # Public release only after the official-runtime update chain, red-blue
+    # gates, live plugin market/security gate and repeated installed-app E2E all pass.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout release metadata
+        uses: actions/checkout@v4
+
+      - name: Download verified installer artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: dsh-desktop-windows
+          path: dist
+
+      - name: Create or update versioned Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          TAG="v${VERSION}"
+          EXE="dist/DSH-Desktop-Setup-${VERSION}.exe"
+          test -f "$EXE"
+          test -f "${EXE}.blockmap"
+          test -f dist/latest.yml
+
+          NOTES=$(cat <<EOF
+          ## DSH Desktop ${VERSION}
+
+          零配置 DeepSeek Harness 桌面端。
+
+          ### 本版重点
+          - 内置 DeepSeek 官方最新稳定 DSH Runtime，并在发布时实时校验 npm 官方 latest，避免安装包出厂即落后。
+          - 新增独立 DSH Runtime 自动更新：默认每天检查官方 npm Registry，新版不会覆盖 app.asar 或安装目录。
+          - 更新包固定官方 registry、校验 sha512 integrity、禁用全部安装期脚本，并查询 OSV；安全检查不可用时 fail-closed。
+          - 新 Runtime 先在隔离 DSH_HOME 启动真实 Web 服务自检；下次启动再用用户真实 Profile 做兼容性预检，通过才激活。
+          - 激活失败自动保留上一版/安装包内 Runtime，不破坏现有 Profile；更新完成不会强制中断正在运行的会话。
+          - stable 通道默认跟随 npm latest；latest 通道可选择更高的 npm next（若官方提供）。
+          - 主 Harness、插件管理、内置皮肤注册统一走同一个已验证 Runtime，避免 CLI 与服务版本漂移。
+          - 新增 Runtime 红蓝测试，覆盖恶意版本号、非官方 tarball、HTTP/凭据 URL、错误 integrity、生命周期脚本与原型污染数据。
+          - 发布门禁实际安装正式候选包，从官方 Registry 下载 Runtime、做 OSV/integrity 校验、启动 HTTP、自检并激活；随后继续跑插件市场和 3 轮完整安装/双启动/卸载 E2E。
+          - 保留 v0.6.0 的实时插件市场与安装前安全预检，以及 @linxin666/dsh-skins / Skin Center。
+          EOF
+          )
+
+          if gh release view "$TAG" --repo guanyibei1314/dsh-desktop-plugin >/dev/null 2>&1; then
+            gh release upload "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
+            gh release edit "$TAG" --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
+          else
+            gh release create "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
+          fi
