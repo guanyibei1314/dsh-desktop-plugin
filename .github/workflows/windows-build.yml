@@ -55,6 +55,29 @@ jobs:
       - name: Verify bundled DSH equals official stable release
         run: npm run verify:official-dsh
 
+      - name: Fast source runtime download and activation probe
+        shell: pwsh
+        run: |
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-probe'
+          $dshHome = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-home'
+          foreach ($dir in @($runtimeRoot, $dshHome)) {
+            if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
+          }
+          $env:DSH_DESKTOP_RUNTIME_ROOT = $runtimeRoot
+          $env:DSH_DESKTOP_DSH_HOME = $dshHome
+          $env:DSH_RUNTIME_AUTO_UPDATE = '0'
+          & node_modules/.bin/electron.cmd . --runtime-update-smoke
+          $exit = $LASTEXITCODE
+          if (Test-Path (Join-Path $runtimeRoot 'state.json')) {
+            Write-Host '[source-runtime-probe] ----- state.json -----'
+            Get-Content (Join-Path $runtimeRoot 'state.json') | ForEach-Object { Write-Host $_ }
+          }
+          if (Test-Path (Join-Path $runtimeRoot 'runtime-update.log')) {
+            Write-Host '[source-runtime-probe] ----- runtime-update.log -----'
+            Get-Content (Join-Path $runtimeRoot 'runtime-update.log') | ForEach-Object { Write-Host $_ }
+          }
+          if ($exit -ne 0) { throw "source runtime update probe failed with exit code $exit" }
+
       - name: Plugin market functional tests
         run: npm run test:market
 
