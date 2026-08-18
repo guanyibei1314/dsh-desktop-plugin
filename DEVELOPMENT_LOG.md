@@ -19,6 +19,7 @@
 - 版本：`0.7.1 -> 0.8.0`
 - PR merge：`7c29fb584244b0c56a1dca77c63611b323d1c656`
 - 正式发布触发：`e26cc388a7dc9ff41aa0182011cd5acfd1fc1c5f` (`release: v0.8.0`)
+- `v0.8.0` tag 已生成，并核对与 release trigger commit 完全一致
 
 ### P1：Runtime 更新 GUI
 
@@ -122,6 +123,8 @@ Windows workflow 新增：
 6. Release Notes 写入正式 EXE SHA-256；
 7. `.sha256` 作为独立 Release asset 发布。
 
+正式 EXE 的 hash 不在工程日志里重复硬编码，避免与 Release asset 漂移；Release Notes 和 `.exe.sha256` 是权威来源。
+
 ### 新增维护安全测试
 
 新增 `scripts/test-runtime-maintenance.js`，Windows CI 中真实构造：
@@ -156,6 +159,10 @@ smoke-home/old-probe/runtime-link
 
 修复：新增 Blocked 版本卡片、最近 blocked 版本摘要以及 warning 状态，不让用户只能通过日志猜测候选为什么没激活。
 
+#### 3. Runtime 设置是否会被主窗口覆盖
+
+发布前额外审查 `settings.json` 持久化。Runtime GUI 保存时基于当前磁盘设置 merge；主窗口已有 `saveSettings()` 也会每次重新读取磁盘再 merge patch，因此后续保存窗口大小、主题等设置不会把 Runtime channel / auto-update 键覆盖掉。
+
 ### PR #8 最终 Windows 验证
 
 最终代码 head：`af07884fec180eb3ab84ca505f383339636d39bb`
@@ -189,7 +196,7 @@ PR 门禁全绿后才合并到 `main`。
 
 ### 正式 Release 状态
 
-`release: v0.8.0` 已按仓库既定流程触发。正式 Release 仍必须再次通过同一套 Windows 门禁；最终 EXE SHA-256 以该正式发布 workflow 生成的 `.sha256` / Release Notes 为准，不能拿 PR artifact digest 冒充。
+`release: v0.8.0` 已按仓库既定流程触发，正式 `v0.8.0` tag 已生成并与发布触发提交完全一致。工作流的 publish 路径只有在 Windows build 全门禁 success 后才会运行，并在创建/更新 Release 前对最终 `.exe.sha256` 执行校验；正式 EXE hash 以 Release Notes / `.exe.sha256` asset 为准，不能拿 PR artifact digest 冒充。
 
 ### 仍存在的限制 / 下一步
 
