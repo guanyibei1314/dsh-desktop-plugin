@@ -2,6 +2,212 @@
 
 > 工程日志用于记录为什么做、发现了什么、如何修、测试是否通过。用户可读版本变化请看 `CHANGELOG.md`；接手说明请看 `HANDOFF.md`。
 
+## 2026-08-18 — v0.8.0 Runtime 控制面板 + Runtime 维护
+
+### 目标
+
+按用户确认范围只完成原交接文档的 **P1 + P3**：
+
+- P1：Runtime 更新可视化 UI；
+- P3：junction-aware smoke Profile 清理、旧 managed Runtime 自动 GC、正式 Release EXE SHA-256；
+- **本版本不做 Linux 发布链扩展**，也没有把跨平台发布塞进本次范围。
+
+### 分支 / PR / 版本
+
+- 分支：`feat/v0.8.0-runtime-maintenance`
+- PR：#8 `feat: v0.8.0 runtime control and maintenance`
+- 版本：`0.7.1 -> 0.8.0`
+- PR merge：`7c29fb584244b0c56a1dca77c63611b323d1c656`
+- 正式发布触发：`e26cc388a7dc9ff41aa0182011cd5acfd1fc1c5f` (`release: v0.8.0`)
+- `v0.8.0` tag 已生成，并核对与 release trigger commit 完全一致
+
+### P1：Runtime 更新 GUI
+
+新增：
+
+- `runtime-control.js`
+- `runtime-settings-window.js`
+- `runtime-settings-preload.js`
+- `runtime-settings.html`
+- `runtime-settings.js`
+
+界面提供：
+
+- 当前 Runtime 版本 / source；
+- 安装包 bundled fallback 版本；
+- 最近一次检查到的官方版本；
+- previous / pending / blocked 状态；
+- 最近检查时间 / 最近激活时间；
+- Stable / Latest 更新通道；
+- 自动更新开关；
+- 手动检查更新；
+- 手动回滚；
+- 重启并应用；
+- 打开 Runtime 目录。
+
+桌面入口：
+
+- 应用菜单 `选项 -> DSH Runtime 更新`；
+- 托盘 `Runtime 更新`。
+
+### Runtime GUI 安全边界
+
+没有给 DSH Web 增加 Runtime 管理 bridge。
+
+Runtime 控制窗口是本地 `BrowserWindow`：
+
+```text
+contextIsolation = true
+nodeIntegration  = false
+sandbox          = true
+```
+
+preload 只暴露最小方法集；IPC handler 同时验证调用者必须是当前 Runtime 设置窗口的真实 `webContents`。窗口拒绝导航到非本地页面并禁止新窗口。
+
+### 自动更新调度调整
+
+v0.7.x 主要在启动后安排一次后台更新检查。v0.8.0 改成应用运行期间持续调度：
+
+```text
+启动后短延迟触发
+      ↓
+调用现有 checkAndStageUpdate
+      ↓
+runtime-manager.shouldCheck 保持 24h 实际联网门禁
+      ↓
+应用仍运行时按小时重新触发门禁判断
+```
+
+因此长期不退出 DSH Desktop 的用户也不会永远错过后续检查，同时没有把真实更新频率提高到每小时。
+
+### P3：junction-aware 清理
+
+v0.7.0 曾经发现：直接递归删除隔离 smoke DSH_HOME 可能沿 Windows junction/link 穿透，伤到 managed Runtime。此前为安全起见停止递归清理。
+
+v0.8.0 新增 `safeRemoveTree()`：
+
+- 每个节点先 `lstat`；
+- 普通目录才递归；
+- symlink / junction / reparse point 只解除链接本身；
+- 删除前强制校验路径仍位于允许的 runtime boundary 内；
+- Windows junction 对 `unlink` 的兼容问题有 `rmdir` 仅删除链接本身的 fallback；
+- 清理失败只记录诊断，不允许通过越界删除来“强行清干净”。
+
+旧 smoke Profile 超过 24 小时后才进入清理。
+
+### P3：managed Runtime GC
+
+启动完成 Runtime 选择/激活后执行 GC：
+
+永远保护：
+
+```text
+activeVersion
+previousVersion
+pendingVersion
+```
+
+其余 `dsh-runtime/versions/*` 不再无限累积。
+
+回滚到 previous 时通过 pending 在下一次启动做真实 Profile 预检；回滚到 bundled 时保留当前 managed 版本为 previous，避免回滚动作本身破坏恢复路径。
+
+### P3：正式 EXE SHA-256
+
+Windows workflow 新增：
+
+1. 对最终 `DSH-Desktop-Setup-<version>.exe` 执行 SHA-256；
+2. 生成同名 `.exe.sha256`；
+3. artifact 同时上传 EXE / checksum / blockmap / latest.yml；
+4. publish job 下载的是已经过完整门禁的 artifact，不重新 build；
+5. publish 前执行 `sha256sum -c`；
+6. Release Notes 写入正式 EXE SHA-256；
+7. `.sha256` 作为独立 Release asset 发布。
+
+正式 EXE 的 hash 不在工程日志里重复硬编码，避免与 Release asset 漂移；Release Notes 和 `.exe.sha256` 是权威来源。
+
+### 新增维护安全测试
+
+新增 `scripts/test-runtime-maintenance.js`，Windows CI 中真实构造：
+
+```text
+smoke-home/old-probe/runtime-link
+                     │
+                     └─ Windows junction -> runtime root 外部目录
+                                           └─ sentinel.txt
+```
+
+测试要求：
+
+- old smoke profile 被清理；
+- junction 本身消失；
+- 外部 `sentinel.txt` 必须仍存在；
+- active / previous / pending fake Runtime 必须保留；
+- stale Runtime 必须被 GC；
+- 任何 runtime boundary 外路径直接拒绝删除。
+
+### 审查中主动发现并修复的问题
+
+#### 1. 更新通道 UI 与旧 updater 语义不完全一致
+
+第一次实现曾把 `DSH_RUNTIME_CHANNEL=stable` 显示为强制覆盖，但原 `runtime-manager.updateSettings()` 实际只有显式 `latest` 环境变量会强制进入 Latest；stored latest 否则仍生效。
+
+修复：`runtime-control.effectiveSettings()` 与原 updater 的真实语义严格对齐，避免 UI 显示一个实际上没有生效的配置。
+
+#### 2. blocked 状态没有独立可视化
+
+第一版 UI 已返回 `blockedVersions`，但没有在主状态卡中单独显示。
+
+修复：新增 Blocked 版本卡片、最近 blocked 版本摘要以及 warning 状态，不让用户只能通过日志猜测候选为什么没激活。
+
+#### 3. Runtime 设置是否会被主窗口覆盖
+
+发布前额外审查 `settings.json` 持久化。Runtime GUI 保存时基于当前磁盘设置 merge；主窗口已有 `saveSettings()` 也会每次重新读取磁盘再 merge patch，因此后续保存窗口大小、主题等设置不会把 Runtime channel / auto-update 键覆盖掉。
+
+### PR #8 最终 Windows 验证
+
+最终代码 head：`af07884fec180eb3ab84ca505f383339636d39bb`
+
+Windows build #58：**success**。
+
+已验证：
+
+1. `npm ci`
+2. 图标 materialize / 校验
+3. JavaScript 静态检查（包含所有 v0.8.0 新文件）
+4. Runtime updater functional
+5. Runtime updater red-blue
+6. **Runtime maintenance junction + GC test**
+7. official DSH stable verify
+8. source Runtime download / activation probe
+9. plugin market functional
+10. plugin market red-blue
+11. PowerShell E2E parse
+12. Windows NSIS build
+13. packaged application smoke
+14. packaged plugin runtime + offline skins
+15. installed official Runtime updater E2E
+16. installed live market + security E2E
+17. **3 rounds clean install -> cold start -> restart -> uninstall**
+18. package/runtime size audit
+19. installer SHA-256 generation
+20. artifact upload
+
+PR 门禁全绿后才合并到 `main`。
+
+### 正式 Release 状态
+
+`release: v0.8.0` 已按仓库既定流程触发，正式 `v0.8.0` tag 已生成并与发布触发提交完全一致。工作流的 publish 路径只有在 Windows build 全门禁 success 后才会运行，并在创建/更新 Release 前对最终 `.exe.sha256` 执行校验；正式 EXE hash 以 Release Notes / `.exe.sha256` asset 为准，不能拿 PR artifact digest 冒充。
+
+### 仍存在的限制 / 下一步
+
+- P0 小白级首次启动 / API Key 引导仍未做；
+- P2 dependency-tree OSV / provenance / 更强插件权限与 sandbox 等纵深防御仍未做；
+- macOS 正式发布链仍未建立；
+- **Linux 发布链本版本按用户要求不做**；
+- 自动预检仍不能证明第三方普通 JS 不含恶意逻辑，也不能覆盖 zero-day / 维护者账号被攻陷等供应链风险。
+
+---
+
 ## 2026-08-18 — v0.7.1 正式桌面图标
 
 ### 目标
