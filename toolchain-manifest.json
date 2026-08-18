@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "windowsX64": {
+    "node": {
+      "version": "24.19.0",
+      "kind": "msi",
+      "file": "node-v24.19.0-x64.msi",
+      "url": "https://nodejs.org/download/release/v24.19.0/node-v24.19.0-x64.msi",
+      "sha256": "f0f66c2a80c08a30a5ab5179ee9ea9e45f9b46289436a8cc87ff833b852db351"
+    },
+    "git": {
+      "version": "2.55.0.3",
+      "kind": "exe",
+      "file": "Git-2.55.0.3-64-bit.exe",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe",
+      "sha256": "af12577d0fdff74243a5988197aa49b957d5044edc17004f6ddf0768996f1dca"
+    }
+  }
+}
