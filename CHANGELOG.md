@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.0 — 2026-08-18
+
+- Windows 安装包内置官方完整 **Node.js 24.19.0 LTS x64 MSI**；不是便携版。当前 PATH 上没有可用 Node 时才按需安装，已有可用 Node 默认保留。
+- Windows 安装包内置官方完整 **Git for Windows 2.55.0.windows.3 x64**；不是 MinGit，也不是 PortableGit。当前 PATH 上没有可用 Git 时才按需安装。
+- Node/Git 安装器使用固定官方 HTTPS URL、固定版本和固定 SHA-256；构建时额外要求 Authenticode 签名有效，任一校验失败直接阻断发布。
+- Node 使用官方 MSI 默认功能集，不强制 `ADDLOCAL=ALL`，避免把可选 native-module build-tools 流程以及 Python / Visual Studio Build Tools 意外带入普通安装。
+- Git 使用完整发行版的 `PathOption=Cmd`，让 `git` 进入 Windows PATH，同时避免整套 Unix 同名工具覆盖 Windows 系统命令。
+- 新增完整工具链真实安装 E2E：强制经 DSH 安装 Node/Git，核对 Program Files 二进制版本、持久化 Machine/User PATH、新 shell 的 `where node` / `where git`，并验证卸载 DSH 后 Node/Git/PATH 仍保留。
+- PR #10 Windows build #64 实测：Node 与 Git 均成功写入 **Machine PATH**；`node v24.19.0`、`git version 2.55.0.windows.3` 与新 shell 解析均通过。
+- PR #10 候选安装包为 `226,818,745 bytes = 216.31 MiB`，相对 v0.8.0 比较基线增加约 `92.17 MiB`；CI 继续保留 **230 MiB 绝对硬上限**与 110 MiB 单版本增长门禁。
+- v0.8.0 的 Runtime GUI、安全自动更新、junction-aware 清理、Runtime GC、实时插件市场、Skin Center 与红蓝安全门禁全部保留。
+- PR #10 merge commit：`476d22021c7d7f34cc51cc0f71f98aa2ccd124bb`；正式发布触发：`e86ce084afcace6d50c6fb636d762ea989cab78a` (`release: v0.9.0`)。
+- 正式安装包 SHA-256 继续以 Release Notes 与同名 `.exe.sha256` asset 为唯一权威值，不使用 PR 候选 hash 或 Actions artifact ZIP digest 代替。
+- macOS / Linux 正式发布链不在本版本范围。
+
 ## 0.8.0 — 2026-08-18
 
 - 新增独立 **DSH Runtime 更新 GUI**，可查看 current / bundled / latest / previous / pending / blocked 状态、最近检查与最近激活时间。
