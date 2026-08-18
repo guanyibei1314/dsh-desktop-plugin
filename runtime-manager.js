@@ -444,11 +444,12 @@ async function installOfficialVersion(release, options = {}) {
   }
 
   const smokeHome = path.join(runtimeRoot(), 'smoke-home', `${release.version}-${Date.now()}`)
-  try {
-    await probeDshBin(installed.bin, smokeHome)
-  } finally {
-    fs.rmSync(smokeHome, { recursive: true, force: true })
-  }
+  await probeDshBin(installed.bin, smokeHome)
+  // Do not recursively remove DSH_HOME here. DSH profiles may contain Windows
+  // directory junctions back into the managed runtime. Recursive cleanup can
+  // cross those junctions and delete the verified runtime itself. The probe
+  // profile contains only small metadata and is intentionally retained.
+  appendLog(`isolated smoke passed for ${release.version}; probe home retained at ${smokeHome}`)
   return installed
 }
 
@@ -617,7 +618,11 @@ async function runUpdaterSmoke() {
   state.lastCheckedAt = new Date().toISOString()
   saveState(state)
   const activated = await activatePendingVersion(state)
-  if (!activated) throw new Error(`runtime smoke failed to activate ${release.version}`)
+  if (!activated) {
+    const failed = loadState()
+    const reason = failed.lastError || (failed.blockedVersions[release.version] && failed.blockedVersions[release.version].reason) || 'unknown activation failure'
+    throw new Error(`runtime smoke failed to activate ${release.version}: ${reason}`)
+  }
   const finalState = loadState()
   const active = validateInstalledVersion(finalState.activeVersion)
   if (!active || active.version !== release.version) throw new Error('runtime smoke active version mismatch')
