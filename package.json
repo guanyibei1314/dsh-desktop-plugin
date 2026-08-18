@@ -1,14 +1,15 @@
 {
   "name": "dsh-desktop",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "DSH Desktop — DeepSeek Harness 原生客户端（内置官方 DSH、安全 Runtime 自动更新、实时插件市场/安全预检/浏览器/Sites/皮肤中心）",
   "main": "bootstrap.js",
   "author": "wuqian",
   "license": "MIT",
   "scripts": {
-    "start": "electron .",
-    "smoke": "electron . --smoke",
-    "check": "node --check bootstrap.js && node --check runtime-update-core.js && node --check runtime-manager.js && node --check bundled-web-ui.js && node --check main.js && node --check preload.js && node --check desktop-extensions.js && node --check plugin-market.js && node --check plugin-security.js && node --check plugin-market-ipc.js && node --check plugin-manager-preload.js && node --check plugin-manager.js && node --check browser-preload.js && node --check browser-toolbar.js && node --check sites-preload.js && node --check sites.js && node --check scripts/test-runtime-update.js && node --check scripts/test-runtime-update-red-blue.js && node --check scripts/verify-official-dsh.js && node --check scripts/test-plugin-market.js && node --check scripts/test-plugin-security.js && node --check scripts/test-plugin-market-red-blue.js && node --check scripts/after-pack.js && node --check scripts/verify-runtime-closure.js && node --check scripts/verify-bundled-skins.js && node --check scripts/verify-packaged-plugin-runtime.js && node --check scripts/package-audit.js && node --check scripts/release.js",
+    "prepare:icon": "node scripts/materialize-app-icon.js",
+    "start": "node scripts/materialize-app-icon.js && electron .",
+    "smoke": "node scripts/materialize-app-icon.js && electron . --smoke",
+    "check": "node scripts/materialize-app-icon.js && node --check bootstrap.js && node --check runtime-update-core.js && node --check runtime-manager.js && node --check bundled-web-ui.js && node --check main.js && node --check preload.js && node --check desktop-extensions.js && node --check plugin-market.js && node --check plugin-security.js && node --check plugin-market-ipc.js && node --check plugin-manager-preload.js && node --check plugin-manager.js && node --check browser-preload.js && node --check browser-toolbar.js && node --check sites-preload.js && node --check sites.js && node --check scripts/materialize-app-icon.js && node --check scripts/test-runtime-update.js && node --check scripts/test-runtime-update-red-blue.js && node --check scripts/verify-official-dsh.js && node --check scripts/test-plugin-market.js && node --check scripts/test-plugin-security.js && node --check scripts/test-plugin-market-red-blue.js && node --check scripts/after-pack.js && node --check scripts/verify-runtime-closure.js && node --check scripts/verify-bundled-skins.js && node --check scripts/verify-packaged-plugin-runtime.js && node --check scripts/package-audit.js && node --check scripts/release.js",
     "test:runtime-update": "node scripts/test-runtime-update.js",
     "test:runtime-update-security": "node scripts/test-runtime-update-red-blue.js",
     "verify:official-dsh": "node scripts/verify-official-dsh.js",
@@ -16,9 +17,9 @@
     "test:market-security": "node scripts/test-plugin-security.js && node scripts/test-plugin-market-red-blue.js",
     "verify:packaged-plugin": "node scripts/verify-packaged-plugin-runtime.js",
     "audit:package": "node scripts/package-audit.js",
-    "make-icons": "node scripts/make-icon.js",
+    "make-icons": "node scripts/make-icon.js && node scripts/materialize-app-icon.js",
     "release": "node scripts/release.js",
-    "dist": "set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis --publish never"
+    "dist": "node scripts/materialize-app-icon.js && set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/&& set ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/&& electron-builder --win nsis --publish never"
   },
   "build": {
     "appId": "dev.dsh.desktop",
