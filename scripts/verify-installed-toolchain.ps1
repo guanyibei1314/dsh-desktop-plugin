@@ -43,7 +43,7 @@ function Assert-CommandVersion {
   )
   if (-not (Test-Path -LiteralPath $Exe)) { throw "$Name executable missing: $Exe" }
   $output = (& $Exe @Arguments 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0) { throw "$Name version command failed with exit code $LASTEXITCODE: $output" }
+  if ($LASTEXITCODE -ne 0) { throw "$Name version command failed with exit code ${LASTEXITCODE}: $output" }
   if ($output -ne $Expected) { throw "$Name version mismatch: expected='$Expected' actual='$output'" }
   Write-Host "[toolchain-e2e] $Name version verified: $output"
 }
@@ -115,10 +115,10 @@ if ($uninstall.ExitCode -ne 0) { throw "DSH uninstall failed with exit code $($u
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after DSH uninstall'
 Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.3' -Name 'Git after DSH uninstall'
 $afterPath = Get-PersistedPathSnapshot
-if (-not ((Test-PathContains $afterPath.Machine $nodeDir) -or (Test-PathContains $afterPath.User $nodeDir))) {
+if (-not ((Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir) -or (Test-PathContains -PathValue $afterPath.User -Expected $nodeDir))) {
   throw 'DSH uninstall incorrectly removed the Node.js PATH entry'
 }
-if (-not ((Test-PathContains $afterPath.Machine $gitCmdDir) -or (Test-PathContains $afterPath.User $gitCmdDir))) {
+if (-not ((Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir) -or (Test-PathContains -PathValue $afterPath.User -Expected $gitCmdDir))) {
   throw 'DSH uninstall incorrectly removed the Git PATH entry'
 }
 
