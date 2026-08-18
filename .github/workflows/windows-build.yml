@@ -37,6 +37,9 @@ jobs:
       - name: DSH runtime updater red-blue security tests
         run: npm run test:runtime-update-security
 
+      - name: Runtime maintenance junction and GC tests
+        run: npm run test:runtime-maintenance
+
       - name: Verify bundled DSH equals official stable release
         run: npm run verify:official-dsh
 
@@ -132,8 +135,8 @@ jobs:
       - name: Audit installer and unpacked runtime
         env:
           DSH_MAX_INSTALLER_MIB: '125'
-          # v0.6.0 official installer size. Keep the per-release +3 MiB gate and
-          # the absolute 125 MiB cap; only advance the comparison baseline.
+          # v0.6.0 official installer size remains the verified comparison
+          # baseline until the next release records its formal EXE checksum/size.
           DSH_BASELINE_INSTALLER_BYTES: '127385289'
           DSH_MAX_INSTALLER_GROWTH_MIB: '3'
         run: npm run audit:package
@@ -148,20 +151,32 @@ jobs:
           Write-Host "INSTALLER_BYTES=$($exe.Length)"
           Write-Host "INSTALLER_MIB=$mib"
 
+      - name: Generate installer SHA-256
+        shell: pwsh
+        run: |
+          $exe = Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1
+          if (-not $exe) { throw "installer not found" }
+          $hash = (Get-FileHash -Algorithm SHA256 $exe.FullName).Hash.ToLowerInvariant()
+          $checksum = "$hash  $($exe.Name)"
+          Set-Content -Path "$($exe.FullName).sha256" -Value $checksum -Encoding ascii
+          Write-Host "INSTALLER_SHA256=$hash"
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: dsh-desktop-windows
           path: |
             dist/DSH-Desktop-Setup-*.exe
+            dist/DSH-Desktop-Setup-*.exe.sha256
             dist/DSH-Desktop-Setup-*.exe.blockmap
             dist/latest.yml
           if-no-files-found: error
           retention-days: 7
 
   publish:
-    # Public release only after the official-runtime update chain, red-blue
-    # gates, live plugin market/security gate and repeated installed-app E2E all pass.
+    # Public release only after the official-runtime update chain, maintenance
+    # safety gate, red-blue gates, live market/security gate and repeated
+    # installed-app E2E all pass.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -187,9 +202,13 @@ jobs:
           VERSION="$(node -p "require('./package.json').version")"
           TAG="v${VERSION}"
           EXE="dist/DSH-Desktop-Setup-${VERSION}.exe"
+          CHECKSUM="${EXE}.sha256"
           test -f "$EXE"
+          test -f "$CHECKSUM"
           test -f "${EXE}.blockmap"
           test -f dist/latest.yml
+          (cd dist && sha256sum -c "$(basename "$CHECKSUM")")
+          SHA256="$(awk '{print $1}' "$CHECKSUM")"
 
           NOTES=$(cat <<EOF
           ## DSH Desktop ${VERSION}
@@ -197,22 +216,23 @@ jobs:
           零配置 DeepSeek Harness 桌面端。
 
           ### 本版重点
-          - 内置 DeepSeek 官方最新稳定 DSH Runtime，并在发布时实时校验 npm 官方 latest，避免安装包出厂即落后。
-          - 新增独立 DSH Runtime 自动更新：默认每天检查官方 npm Registry，新版不会覆盖 app.asar 或安装目录。
-          - 更新包固定官方 registry、校验 sha512 integrity、禁用全部安装期脚本，并查询 OSV；安全检查不可用时 fail-closed。
-          - 新 Runtime 先在隔离 DSH_HOME 启动真实 Web 服务自检；下次启动再用用户真实 Profile 做兼容性预检，通过才激活。
-          - 激活失败自动保留上一版/安装包内 Runtime，不破坏现有 Profile；更新完成不会强制中断正在运行的会话。
-          - stable 通道默认跟随 npm latest；latest 通道可选择更高的 npm next（若官方提供）。
-          - 主 Harness、插件管理、内置皮肤注册统一走同一个已验证 Runtime，避免 CLI 与服务版本漂移。
-          - 新增 Runtime 红蓝测试，覆盖恶意版本号、非官方 tarball、HTTP/凭据 URL、错误 integrity、生命周期脚本与原型污染数据。
-          - 发布门禁实际安装正式候选包，从官方 Registry 下载 Runtime、做 OSV/integrity 校验、启动 HTTP、自检并激活；随后继续跑插件市场和 3 轮完整安装/双启动/卸载 E2E。
-          - 保留 v0.6.0 的实时插件市场与安装前安全预检，以及 @linxin666/dsh-skins / Skin Center。
+          - 新增独立 Runtime 更新 GUI：当前/兜底/最新/previous/pending 状态、stable/latest 通道、自动更新开关、立即检查和手动回滚。
+          - Runtime 管理窗口继续使用本地 sandbox + 最小 IPC，DSH Web 不获得 Runtime 管理权限。
+          - 自动更新调度改为持续运行期间定期触发检查，24 小时频率仍由 Runtime updater 的 shouldCheck 门禁控制。
+          - 新增 junction-aware smoke Profile 清理：目录联接/符号链接只解除链接，不递归穿透外部目标。
+          - 自动清理未使用 managed Runtime，仅保留 active / previous / pending，避免版本目录长期累积。
+          - 新增 Runtime maintenance CI：构造真实 Windows junction，验证外部 sentinel 不会被清理链删除，并验证受保护版本不会被 GC。
+          - Release 现在随正式 EXE 生成并发布 SHA-256 校验文件；Release Notes 明确记录最终安装包哈希。
+          - 保留官方 npm/integrity/OSV/双阶段 Runtime 自检、实时插件市场与红蓝安全门禁。
+
+          ### Windows 安装包 SHA-256
+          \`${SHA256}\`
           EOF
           )
 
           if gh release view "$TAG" --repo guanyibei1314/dsh-desktop-plugin >/dev/null 2>&1; then
-            gh release upload "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
+            gh release upload "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
             gh release edit "$TAG" --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
           else
-            gh release create "$TAG" "$EXE" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
+            gh release create "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
           fi

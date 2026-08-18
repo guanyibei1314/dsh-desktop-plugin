@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>DSH Runtime 更新</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, "Segoe UI", "PingFang SC", system-ui, sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: #0b0f14; color: #e6edf3; }
+    main { width: min(760px, calc(100% - 36px)); margin: 28px auto 40px; }
+    h1 { margin: 0 0 6px; font-size: 25px; }
+    .sub { color: #8b949e; margin-bottom: 22px; line-height: 1.6; }
+    .card { background: #111821; border: 1px solid #26303a; border-radius: 14px; padding: 18px; margin-bottom: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .metric { background: #0d131a; border: 1px solid #202a34; border-radius: 10px; padding: 12px; }
+    .label { color: #8b949e; font-size: 12px; margin-bottom: 5px; }
+    .value { font-size: 15px; overflow-wrap: anywhere; }
+    .row { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 12px 0; }
+    select, button { font: inherit; }
+    select { min-width: 160px; color: #e6edf3; background: #0d131a; border: 1px solid #303b46; border-radius: 8px; padding: 8px 10px; }
+    button { border: 1px solid #303b46; border-radius: 9px; padding: 9px 13px; color: #e6edf3; background: #17202a; cursor: pointer; }
+    button:hover { background: #1d2935; }
+    button.primary { background: #176b87; border-color: #2186a8; }
+    button.danger { background: #412024; border-color: #6f3138; }
+    button:disabled { cursor: default; opacity: .5; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
+    .switch { display: inline-flex; align-items: center; gap: 9px; }
+    .status { border-radius: 9px; padding: 10px 12px; background: #0d131a; border: 1px solid #26303a; line-height: 1.5; }
+    .status.ok { border-color: #285d43; }
+    .status.warn { border-color: #765f26; }
+    .status.err { border-color: #74323a; }
+    .error { color: #ffb4b4; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .muted { color: #8b949e; font-size: 13px; }
+    ul { margin: 8px 0 0; padding-left: 20px; color: #c9d1d9; }
+    code { color: #9bd9ef; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } .row { align-items: flex-start; flex-direction: column; } select { width: 100%; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>DSH Runtime 更新</h1>
+    <div class="sub">查看当前 Runtime、更新通道、自动更新状态、候选版本与回滚状态。更新仍经过官方源、integrity、OSV 和启动兼容性检查。</div>
+
+    <section class="card">
+      <div class="grid">
+        <div class="metric"><div class="label">当前 Runtime</div><div class="value" id="current">—</div></div>
+        <div class="metric"><div class="label">安装包兜底版本</div><div class="value" id="bundled">—</div></div>
+        <div class="metric"><div class="label">官方最新记录</div><div class="value" id="latest">—</div></div>
+        <div class="metric"><div class="label">待激活版本</div><div class="value" id="pending">—</div></div>
+        <div class="metric"><div class="label">上一版本</div><div class="value" id="previous">—</div></div>
+        <div class="metric"><div class="label">Blocked 版本</div><div class="value" id="blocked">—</div></div>
+        <div class="metric"><div class="label">最近检查</div><div class="value" id="checked">—</div></div>
+        <div class="metric"><div class="label">最近激活</div><div class="value" id="updated">—</div></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="row">
+        <div><strong>更新通道</strong><div class="muted">Stable 默认跟随官方 npm latest；Latest 可跟进官方 next。</div></div>
+        <select id="channel"><option value="stable">Stable</option><option value="latest">Latest</option></select>
+      </div>
+      <div class="row">
+        <div><strong>自动检查更新</strong><div class="muted">后台定期触发检查；真正下载、暂存与激活仍按安全门禁执行。</div></div>
+        <label class="switch"><input id="autoUpdate" type="checkbox"> 启用</label>
+      </div>
+      <div id="override" class="muted"></div>
+      <div class="actions">
+        <button id="save" class="primary">保存设置</button>
+        <button id="check">立即检查更新</button>
+        <button id="rollback" class="danger">回滚上一版本</button>
+        <button id="restart">重启并应用</button>
+        <button id="folder">打开 Runtime 目录</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <strong>状态</strong>
+      <div id="status" class="status" style="margin-top:10px">正在读取…</div>
+      <div id="error" class="error" style="margin-top:10px"></div>
+    </section>
+
+    <section class="card">
+      <strong>已管理 Runtime</strong>
+      <div class="muted">P3 自动清理只保留 active / previous / pending；旧版本不会无限累积。</div>
+      <ul id="versions"><li>—</li></ul>
+    </section>
+  </main>
+  <script src="runtime-settings.js"></script>
+</body>
+</html>
