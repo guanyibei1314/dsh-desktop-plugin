@@ -50,7 +50,9 @@
         <div class="metric"><div class="label">官方最新记录</div><div class="value" id="latest">—</div></div>
         <div class="metric"><div class="label">待激活版本</div><div class="value" id="pending">—</div></div>
         <div class="metric"><div class="label">上一版本</div><div class="value" id="previous">—</div></div>
+        <div class="metric"><div class="label">Blocked 版本</div><div class="value" id="blocked">—</div></div>
         <div class="metric"><div class="label">最近检查</div><div class="value" id="checked">—</div></div>
+        <div class="metric"><div class="label">最近激活</div><div class="value" id="updated">—</div></div>
       </div>
     </section>
 
@@ -60,7 +62,7 @@
         <select id="channel"><option value="stable">Stable</option><option value="latest">Latest</option></select>
       </div>
       <div class="row">
-        <div><strong>自动检查更新</strong><div class="muted">后台定期检查；真正安装仍按安全门禁执行。</div></div>
+        <div><strong>自动检查更新</strong><div class="muted">后台定期触发检查；真正下载、暂存与激活仍按安全门禁执行。</div></div>
         <label class="switch"><input id="autoUpdate" type="checkbox"> 启用</label>
       </div>
       <div id="override" class="muted"></div>
