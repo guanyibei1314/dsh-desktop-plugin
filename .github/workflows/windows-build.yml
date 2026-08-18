@@ -132,7 +132,9 @@ jobs:
       - name: Audit installer and unpacked runtime
         env:
           DSH_MAX_INSTALLER_MIB: '125'
-          DSH_BASELINE_INSTALLER_BYTES: '126499002'
+          # v0.6.0 official installer size. Keep the per-release +3 MiB gate and
+          # the absolute 125 MiB cap; only advance the comparison baseline.
+          DSH_BASELINE_INSTALLER_BYTES: '127385289'
           DSH_MAX_INSTALLER_GROWTH_MIB: '3'
         run: npm run audit:package
 
