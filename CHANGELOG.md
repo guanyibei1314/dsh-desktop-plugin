@@ -11,6 +11,7 @@
 - 新增 `test:runtime-maintenance`，在 Windows CI 中构造真实 junction + 外部 sentinel，验证清理不会越界，并验证受保护 Runtime 不会被 GC。
 - Windows Release 现在为最终安装包生成 `.sha256` 文件，publish 阶段会再次校验并把最终 EXE SHA-256 写入 Release Notes。
 - PR #8 的最终 Windows build #58 已通过：Runtime/插件红蓝测试、maintenance junction/GC、安全更新链、NSIS、packaged smoke、安装后 Runtime 更新、live market/security、三轮 clean-install/restart/uninstall、体积审计与候选 SHA-256 生成。
+- 正式 `v0.8.0` tag 已生成并核对与 `release: v0.8.0` 提交完全一致；正式 EXE hash 以 Release Notes / `.exe.sha256` asset 为权威来源。
 - 本版本不扩展 Linux 发布链；跨平台正式发布仍留给后续版本。
 
 ## 0.7.1 — 2026-08-18
