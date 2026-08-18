@@ -2,6 +2,270 @@
 
 > 工程日志用于记录为什么做、发现了什么、如何修、测试是否通过。用户可读版本变化请看 `CHANGELOG.md`；接手说明请看 `HANDOFF.md`。
 
+## 2026-08-18 — v0.9.0 官方完整 Node.js + Git 工具链
+
+### 目标
+
+用户明确否决便携 Node 与 MinGit，希望：
+
+- DSH Windows 安装包直接带 **完整 Node.js**；
+- 直接带 **完整 Git for Windows**；
+- 安装后自动进入 Windows 持久化 PATH，普通 cmd / PowerShell 都可直接使用；
+- 安装包可以增大，但必须保留明确体积上限；
+- 不扩展 Linux/macOS 发布范围；
+- 同步 GitHub、交接文档和工程日志。
+
+### 分支 / PR / 版本
+
+- 分支：`feat/v0.9.0-bundled-toolchain`
+- PR：#10 `feat: v0.9.0 bundle full Node.js and Git toolchain`
+- 版本：`0.8.0 -> 0.9.0`
+- 最终功能 head：`803589d6f772f3001775b2553a86443ad17ebc9b`
+- PR merge：`476d22021c7d7f34cc51cc0f71f98aa2ccd124bb`
+- 正式发布触发：`e86ce084afcace6d50c6fb636d762ea989cab78a` (`release: v0.9.0`)
+
+### Node.js 方案
+
+固定完整官方安装器：
+
+```text
+Node.js 24.19.0 LTS x64
+node-v24.19.0-x64.msi
+SHA-256 f0f66c2a80c08a30a5ab5179ee9ea9e45f9b46289436a8cc87ff833b852db351
+```
+
+CI 实际下载验证：
+
+```text
+bytes=32,972,800
+signer=CN=OpenJS Foundation, O=OpenJS Foundation, L=San Francisco, S=California, C=US
+Authenticode=Valid
+```
+
+构建只接受：
+
+```text
+https://nodejs.org/download/release/v24.19.0/node-v24.19.0-x64.msi
+```
+
+URL 必须是无凭据 HTTPS、host/path 必须精确匹配 manifest；随后再做 SHA-256 与 Authenticode 验证。
+
+### Git for Windows 方案
+
+固定完整官方安装器：
+
+```text
+Git for Windows 2.55.0.windows.3 x64
+Git-2.55.0.3-64-bit.exe
+SHA-256 af12577d0fdff74243a5988197aa49b957d5044edc17004f6ddf0768996f1dca
+```
+
+CI 实际下载验证：
+
+```text
+bytes=65,388,144
+signer=CN=Johannes Schindelin, O=Johannes Schindelin, L=Bruehl, C=DE
+Authenticode=Valid
+```
+
+这是真正完整 Git for Windows installer，不是 `MinGit-*`，也不是 `PortableGit-*`。
+
+### 安装行为
+
+DSH NSIS 安装器先检查：
+
+```text
+node --version
+  -> success: 保留现有 Node
+  -> fail:    调用内置官方 Node MSI
+
+git --version
+  -> success: 保留现有 Git
+  -> fail:    调用内置官方 Git for Windows installer
+```
+
+Node：
+
+```text
+msiexec /i <official-node.msi> /passive /norestart
+```
+
+Git：
+
+```text
+Git-...exe /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /o:PathOption=Cmd
+```
+
+安装后广播：
+
+```text
+WM_SETTINGCHANGE / Environment
+```
+
+Node/Git 由各自官方安装器维护系统产品注册和 PATH。DSH 本身仍保持既有 per-user 安装模型，避免 v0.9.0 顺便改变 Desktop 的升级/安装权限语义。
+
+### 为什么 Git 选择 PathOption=Cmd
+
+目标不是削减 Git 功能。完整 Git for Windows 仍然安装，包括 Git Bash / Git GUI / Git LFS 等发行内容。
+
+`PathOption=Cmd` 只决定 Windows PATH 暴露面：让 `git` 可直接从 cmd/PowerShell 使用，同时不把完整 Unix 命令目录放在 Windows PATH 前面，降低 `find`、`sort` 等同名命令覆盖 Windows 系统命令的风险。
+
+### 审查中发现并修复：Node ADDLOCAL=ALL
+
+第一版安装脚本曾使用：
+
+```text
+ADDLOCAL=ALL
+```
+
+进一步审查发现这不应该作为普通用户自动安装策略，因为 Node 的可选 native-module build-tools 流程可能进一步牵涉 Python / Visual Studio Build Tools，体积和副作用都远超本次目标。
+
+修复：删除 `ADDLOCAL=ALL`，改用官方 MSI 默认功能选择，只安装正常 Node/npm/核心组件/PATH，不由 DSH 强制选择额外原生编译工具链。
+
+### 工具链来源安全
+
+新增：
+
+```text
+toolchain-manifest.json
+scripts/fetch-toolchain.ps1
+scripts/test-toolchain-manifest.js
+```
+
+流程：
+
+```text
+固定版本 + 固定官方 URL
+      ↓
+严格 host/path 校验
+      ↓
+下载完整官方 installer
+      ↓
+SHA-256 精确匹配
+      ↓
+Authenticode Status=Valid
+      ↓
+才允许进入 NSIS payload
+```
+
+下载缓存如果 hash 不符会先删除，再重新拉取；验证失败不允许继续打包。
+
+### 完整工具链真实安装 E2E
+
+新增：
+
+```text
+scripts/verify-installed-toolchain.ps1
+```
+
+测试使用 `DSH_TOOLCHAIN_FORCE_INSTALL=1` 强制执行两套官方完整安装器，然后检查：
+
+1. `C:\Program Files\nodejs\node.exe` 存在；
+2. `node --version == v24.19.0`；
+3. `C:\Program Files\Git\cmd\git.exe` 存在；
+4. `git --version == git version 2.55.0.windows.3`；
+5. 从注册表语义读取 Machine/User PATH；
+6. Node/Git 路径必须真实持久化；
+7. 重新构造 PATH 后的新 `cmd` 必须 `where node` / `where git` 成功；
+8. 卸载 DSH Desktop；
+9. Node/Git 二进制必须继续存在；
+10. Node/Git PATH 条目必须继续存在。
+
+PR #10 build #64 实际结果：
+
+```text
+Node.js version verified: v24.19.0
+Git for Windows version verified: git version 2.55.0.windows.3
+PATH verified: node(machine=True,user=False) git(machine=True,user=False)
+new shell resolves node and git from persisted PATH
+DSH uninstall independence passed
+```
+
+这证明本次目标不是“DSH 内部能找到工具”，而是系统级持久化 PATH 真正生效。
+
+### PR #10 Windows build #64
+
+结果：**success**。
+
+已通过：
+
+1. `npm ci`
+2. toolchain manifest source/version/hash checks
+3. JavaScript static syntax
+4. Runtime updater functional
+5. Runtime updater red-blue
+6. Runtime maintenance junction + GC
+7. official DSH stable verify
+8. source Runtime download / activation probe
+9. plugin market functional
+10. plugin market red-blue
+11. PowerShell E2E parse
+12. full Node/Git installer download
+13. full Node/Git SHA-256 + Authenticode verification
+14. Windows NSIS build
+15. packaged application smoke
+16. packaged plugin runtime + offline skins
+17. **full Node/Git installation + persisted PATH E2E**
+18. installed official Runtime update E2E
+19. installed live market + security E2E
+20. **3 rounds clean install -> cold start -> restart -> uninstall**
+21. package/runtime size audit
+22. installer SHA-256 generation
+23. artifact upload
+
+三轮安装回归中有一次 `taskkill` 对已经退出的子进程报告“no running instance”，但完整 E2E 继续成功结束，未形成残留进程或卸载失败。
+
+### 体积审计
+
+PR #10 候选：
+
+```text
+DSH-Desktop-Setup-0.9.0.exe
+226,818,745 bytes
+216.31 MiB
+```
+
+比较基线：
+
+```text
+v0.8.0 candidate baseline = 130,173,608 bytes
+增加 = 96,645,137 bytes = 92.17 MiB
+```
+
+新门禁：
+
+```text
+DSH_MAX_INSTALLER_MIB=230
+DSH_MAX_INSTALLER_GROWTH_MIB=110
+```
+
+没有取消体积限制。完整 Node/Git 是本次体积增加的明确原因，超过 230 MiB 仍阻断发布。
+
+PR 候选 EXE 曾计算 SHA-256，但它不是正式 Release hash；正式值只认发布 workflow 生成并校验的 `.exe.sha256` / Release Notes。
+
+### 生命周期边界
+
+Node.js 与 Git for Windows 安装后是独立产品：
+
+- DSH 卸载不删除它们；
+- DSH 当前不负责它们后续的产品更新/卸载；
+- 用户原本已经有可用 Node/Git 时，普通安装默认不覆盖；
+- 若未来要做 Node/Git 版本维护，应单独设计，不与 DSH Runtime 自动更新混为一套机制。
+
+### 元数据审计备注
+
+发布前审计发现 `package-lock.json` 顶层应用版本字段从旧版本起仍保留 `0.7.0`，而 `package.json` 已为 `0.9.0`。`npm ci`、依赖解析、打包和所有真实 E2E 均通过，说明它不是运行时/依赖闭包故障；但这是生成锁文件的应用版本元数据漂移，后续在重新生成 lock 时应同步清理，不能把它解释成当前正式应用版本。
+
+### 仍存在的限制 / 下一步
+
+- P0 小白级首次启动 / API Key 引导仍未做；
+- P2 dependency-tree OSV / provenance / 更强插件权限与 sandbox 等纵深防御仍未做；
+- Node/Git 当前只在“缺失可用命令”时安装，不承担系统工具链自动升级职责；
+- macOS / Linux 正式发布链不在 v0.9.0 范围；
+- 工具链签名/哈希验证可以降低供应链风险，但仍不能证明不存在上游 zero-day 或上游签名主体本身被攻陷。
+
+---
+
 ## 2026-08-18 — v0.8.0 Runtime 控制面板 + Runtime 维护
 
 ### 目标
