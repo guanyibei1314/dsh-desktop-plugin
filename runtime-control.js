@@ -53,10 +53,12 @@ function effectiveSettings() {
   const stored = storedSettings()
   const envChannel = process.env.DSH_RUNTIME_CHANNEL
   const envAuto = process.env.DSH_RUNTIME_AUTO_UPDATE
-  const channelOverridden = envChannel === 'stable' || envChannel === 'latest'
+  // Keep this exactly aligned with runtime-manager.updateSettings(): only an
+  // explicit `latest` environment value forces the channel. A stored latest
+  // preference otherwise wins over stable/default.
+  const channelOverridden = envChannel === 'latest'
   const autoOverridden = ['0', '1', 'false', 'true'].includes(String(envAuto || '').toLowerCase())
-  let channel = stored.channel
-  if (channelOverridden) channel = envChannel
+  const channel = channelOverridden ? 'latest' : stored.channel
   let autoUpdate = stored.autoUpdate
   if (autoOverridden) autoUpdate = envAuto === '1' || String(envAuto).toLowerCase() === 'true'
   return {
