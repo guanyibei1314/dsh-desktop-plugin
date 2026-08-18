@@ -13,7 +13,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 75
+    timeout-minutes: 90
 
     steps:
       - name: Checkout
@@ -27,6 +27,9 @@ jobs:
 
       - name: Install dependencies from committed lock
         run: npm ci
+
+      - name: Toolchain manifest security checks
+        run: npm run test:toolchain-manifest
 
       - name: Static syntax checks
         run: npm run check
@@ -75,7 +78,13 @@ jobs:
       - name: Validate PowerShell E2E scripts
         shell: pwsh
         run: |
-          foreach ($script in @('scripts/verify-installed-app.ps1', 'scripts/verify-installed-market.ps1', 'scripts/verify-installed-runtime-update.ps1')) {
+          foreach ($script in @(
+            'scripts/fetch-toolchain.ps1',
+            'scripts/verify-installed-toolchain.ps1',
+            'scripts/verify-installed-app.ps1',
+            'scripts/verify-installed-market.ps1',
+            'scripts/verify-installed-runtime-update.ps1'
+          )) {
             $tokens = $null
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile(
@@ -90,6 +99,9 @@ jobs:
             Write-Host "[e2e-parse] $script parsed successfully"
           }
 
+      - name: Fetch and verify full Node.js and Git installers
+        run: npm run prepare:toolchain
+
       - name: Build Windows installer
         run: npm run dist
 
@@ -103,6 +115,14 @@ jobs:
 
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
+
+      - name: Verify installed full Node.js Git and persisted PATH
+        shell: pwsh
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          & pwsh -NoProfile -File scripts/verify-installed-toolchain.ps1 -InstallerPath $installer
+          if ($LASTEXITCODE -ne 0) { throw "installed full toolchain E2E failed with exit code $LASTEXITCODE" }
 
       - name: Verify installed official DSH runtime update chain
         shell: pwsh
@@ -134,11 +154,11 @@ jobs:
 
       - name: Audit installer and unpacked runtime
         env:
-          DSH_MAX_INSTALLER_MIB: '125'
-          # v0.6.0 official installer size remains the verified comparison
-          # baseline until the next release records its formal EXE checksum/size.
-          DSH_BASELINE_INSTALLER_BYTES: '127385289'
-          DSH_MAX_INSTALLER_GROWTH_MIB: '3'
+          # v0.9.0 intentionally embeds the official full Node MSI and full Git
+          # for Windows installer. Keep a hard cap instead of removing size gates.
+          DSH_MAX_INSTALLER_MIB: '230'
+          DSH_BASELINE_INSTALLER_BYTES: '130173608'
+          DSH_MAX_INSTALLER_GROWTH_MIB: '110'
         run: npm run audit:package
 
       - name: Report installer size
@@ -174,9 +194,9 @@ jobs:
           retention-days: 7
 
   publish:
-    # Public release only after the official-runtime update chain, maintenance
-    # safety gate, red-blue gates, live market/security gate and repeated
-    # installed-app E2E all pass.
+    # Public release only after the full toolchain install/PATH gate, official
+    # Runtime update chain, maintenance safety, red-blue gates, live market
+    # security and repeated installed-app E2E all pass.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -216,14 +236,12 @@ jobs:
           零配置 DeepSeek Harness 桌面端。
 
           ### 本版重点
-          - 新增独立 Runtime 更新 GUI：当前/兜底/最新/previous/pending 状态、stable/latest 通道、自动更新开关、立即检查和手动回滚。
-          - Runtime 管理窗口继续使用本地 sandbox + 最小 IPC，DSH Web 不获得 Runtime 管理权限。
-          - 自动更新调度改为持续运行期间定期触发检查，24 小时频率仍由 Runtime updater 的 shouldCheck 门禁控制。
-          - 新增 junction-aware smoke Profile 清理：目录联接/符号链接只解除链接，不递归穿透外部目标。
-          - 自动清理未使用 managed Runtime，仅保留 active / previous / pending，避免版本目录长期累积。
-          - 新增 Runtime maintenance CI：构造真实 Windows junction，验证外部 sentinel 不会被清理链删除，并验证受保护版本不会被 GC。
-          - Release 现在随正式 EXE 生成并发布 SHA-256 校验文件；Release Notes 明确记录最终安装包哈希。
-          - 保留官方 npm/integrity/OSV/双阶段 Runtime 自检、实时插件市场与红蓝安全门禁。
+          - 安装包内置并安装官方完整 Node.js 24.19.0 LTS x64 MSI，不使用便携版；已有可用 Node 时默认保留用户现有安装。
+          - 安装包内置并安装官方完整 Git for Windows 2.55.0(3) x64 安装器，不使用 MinGit；已有可用 Git 时默认保留用户现有安装。
+          - Node/Git 安装器固定官方来源、版本和 SHA-256，构建时同时校验 Authenticode 签名，来源或哈希不符直接阻断发布。
+          - Node.js 和 Git 由官方安装器持久化到 Windows PATH；Git 使用安全的 Cmd PATH 模式，避免 Unix find/sort 等工具覆盖 Windows 同名命令。
+          - 新增真实安装 E2E：强制安装完整 Node/Git，核对 Program Files 二进制版本、Machine/User PATH、新 shell 命令解析，并验证卸载 DSH 不会删除独立 Node/Git。
+          - v0.8.0 的 Runtime GUI、安全自动更新、junction-aware 清理、Runtime GC、插件市场与红蓝安全门禁全部保留。
 
           ### Windows 安装包 SHA-256
           \`${SHA256}\`
