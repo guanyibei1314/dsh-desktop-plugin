@@ -88,6 +88,18 @@ function assertInside(target, boundary) {
   if (resolved !== root && !resolved.startsWith(root + path.sep)) throw new Error(`refusing to remove path outside runtime root: ${resolved}`)
 }
 
+function unlinkReparsePoint(target) {
+  try {
+    fs.unlinkSync(target)
+  } catch (err) {
+    if (process.platform === 'win32' && err && ['EPERM', 'EISDIR'].includes(err.code)) {
+      fs.rmdirSync(target)
+      return
+    }
+    throw err
+  }
+}
+
 function safeRemoveTree(target, boundary) {
   assertInside(target, boundary)
   let stat
@@ -96,7 +108,7 @@ function safeRemoveTree(target, boundary) {
     throw err
   }
   if (stat.isSymbolicLink()) {
-    fs.unlinkSync(target)
+    unlinkReparsePoint(target)
     return true
   }
   if (!stat.isDirectory()) {
