@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.0 — 2026-08-18
+
+- 新增独立 **DSH Runtime 更新 GUI**，可查看 current / bundled / latest / previous / pending / blocked 状态、最近检查与最近激活时间。
+- 新增 Stable / Latest 更新通道选择、自动更新开关、手动检查更新、手动回滚、重启应用与打开 Runtime 目录。
+- Runtime 设置窗口继续采用本地 sandbox + 最小 IPC；DSH Web 不获得 Runtime 管理权限。
+- 自动更新从“启动后单次调度”改为应用运行期间持续调度；真正联网检查仍由原有 24 小时 `shouldCheck` 门禁控制。
+- 新增 junction-aware smoke Profile 清理：遇到 Windows junction / 符号链接时只解除链接，不递归穿透外部目标。
+- 新增 managed Runtime 自动 GC，仅保留 `active` / `previous` / `pending`，避免旧 Runtime 长期累积。
+- 新增 `test:runtime-maintenance`，在 Windows CI 中构造真实 junction + 外部 sentinel，验证清理不会越界，并验证受保护 Runtime 不会被 GC。
+- Windows Release 现在为最终安装包生成 `.sha256` 文件，publish 阶段会再次校验并把最终 EXE SHA-256 写入 Release Notes。
+- PR #8 的最终 Windows build #58 已通过：Runtime/插件红蓝测试、maintenance junction/GC、安全更新链、NSIS、packaged smoke、安装后 Runtime 更新、live market/security、三轮 clean-install/restart/uninstall、体积审计与候选 SHA-256 生成。
+- 本版本不扩展 Linux 发布链；跨平台正式发布仍留给后续版本。
+
 ## 0.7.1 — 2026-08-18
 
 - 新增正式 DSH Desktop 蓝青科技风桌面图标。
