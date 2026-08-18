@@ -5,31 +5,59 @@
 ![Electron](https://img.shields.io/badge/Electron-43-47848f?logo=electron&logoColor=white)
 ![Platform](https://img.shields.io/badge/当前安装包-Windows_x64-0d1117)
 ![License](https://img.shields.io/badge/License-MIT-d9a441)
-![Version](https://img.shields.io/badge/Version-0.7.0-3fb950)
+![Version](https://img.shields.io/badge/Version-0.7.1-3fb950)
 
 **零配置，开箱即用。** 安装后直接运行，无需系统安装 Node.js / pnpm。应用优先连接本机已有 DSH 服务；没有则自动启动随安装包交付并经过验证的 DeepSeek Harness Runtime。
 
-v0.7.0 在 v0.6.0 实时插件市场与插件安全预检的基础上，新增了 **官方 DSH Runtime 安全自动更新体系**：官方发布新版本后，Desktop 可以独立下载、校验、隔离自检、暂存、兼容性预检并安全切换，失败时继续使用上一版本或安装包内置 Runtime。
+v0.7.1 在 v0.7.0 的官方 DSH Runtime 安全自动更新、实时插件市场、安全预检和内置 Skin Center 基础上，加入新的 **DSH Desktop 正式桌面图标**。图标源在构建前会经过 PNG 结构、尺寸、字节长度和 SHA-256 校验；任何损坏都会让 CI fail-closed，避免错误资源进入安装包。
 
 ## 立即下载
 
 ### Windows x64
 
-**[下载 DSH Desktop v0.7.0 安装包](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.7.0/DSH-Desktop-Setup-0.7.0.exe)**
+**[下载 DSH Desktop v0.7.1 安装包](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.7.1/DSH-Desktop-Setup-0.7.1.exe)**
 
 Release 页面：
 
-**https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.7.0**
+**https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.7.1**
 
 当前正式发行目标为 Windows x64。macOS / Linux 代码路径仍保留，但尚未建立正式安装包发布流程。
 
-## v0.7.0 重点
+## v0.7.1 重点
 
-### 1. 官方 DSH Runtime 安全自动更新
+### 1. 新 DSH Desktop 桌面图标
 
-安装包内置官方 `@deepseek-ai/dsh@0.1.0-rc.7` 作为永久兜底 Runtime。默认 Stable 通道每天检查一次官方 npm `latest`；可选 Latest 通道在官方提供更高 `next` 时跟进。
+v0.7.1 使用新的蓝青科技风 DSH Desktop 图标，并统一进入：
 
-更新链路不是简单执行 `npm install @latest`，而是：
+- Windows 应用 / 安装包图标；
+- 主窗口；
+- 启动闪屏；
+- 发送消息窗口；
+- 内置终端窗口。
+
+为了避免二进制资源在仓库传输或构建中悄悄损坏，正式图标采用受控源 + 构建时还原机制：
+
+```text
+assets/icon-source.b64
+        ↓
+scripts/materialize-app-icon.js
+        ↓
+校验 base64 / PNG signature / 256×256 / byte size / SHA-256
+        ↓
+assets/icon.png
+        ↓
+Electron / electron-builder / NSIS
+```
+
+任何校验不一致都会直接阻断构建。
+
+> 托盘图标继续使用独立的轻量小尺寸图标，避免复杂彩色图标在 16–24 px 下失去辨识度。
+
+### 2. 官方 DSH Runtime 安全自动更新
+
+安装包内置官方 `@deepseek-ai/dsh@0.1.0-rc.7` 作为兜底 Runtime。默认 Stable 通道每天检查一次官方 npm `latest`；可选 Latest 通道在官方提供更高 `next` 时跟进。
+
+更新链路不是简单执行 `npm install @latest`：
 
 ```text
 官方 npm Registry
@@ -64,9 +92,9 @@ OSV 已知漏洞检查
 - 更新完成不会强制中断正在运行的会话；
 - 主 Harness、插件管理与 bundled skin reconciliation 统一使用当前已验证 Runtime，避免 CLI / 服务版本漂移。
 
-### 2. 实时插件市场
+### 3. 实时插件市场
 
-插件管理器直接连接社区实时目录。每次打开 / 刷新优先读取在线目录；仅在网络失败时回退最近一次本地缓存。
+插件管理器连接社区实时目录。每次打开 / 刷新优先读取在线目录；仅在网络失败时回退最近一次本地缓存。
 
 支持：
 
@@ -77,9 +105,9 @@ OSV 已知漏洞检查
 - 已安装状态对账；
 - 非 npm / URL / Git / shell 条目仅展示，不进入一键安装链路。
 
-### 3. 插件安装前安全预检
+### 4. 插件安装前安全预检
 
-市场安装 / 升级前会重新检查：
+市场安装 / 升级前会检查：
 
 - npm 发布元数据；
 - lifecycle scripts；
@@ -94,9 +122,9 @@ OSV 已知漏洞检查
 
 - **Critical / Unknown**：市场一键安装直接阻止；
 - **High**：必须再次确认；
-- 安全评分属于自动化风险预检，**不代表对第三方插件绝对安全的保证**。
+- 自动评分属于风险预检，**不代表对第三方插件绝对安全的保证**。
 
-### 4. 内置 Skin Center
+### 5. 内置 Skin Center
 
 继续固定并离线交付 `@linxin666/dsh-skins@0.1.18`，包含 Skin Center 与上游皮肤资产。
 
@@ -157,7 +185,7 @@ Runtime updater       -> 固定官方源 + integrity + OSV + 双阶段自检
 
 ### Runtime 更新红蓝测试
 
-v0.7.0 的对抗用例覆盖：
+覆盖：
 
 - 恶意版本号 / shell 字符；
 - 假冒 npm 包；
@@ -188,21 +216,22 @@ v0.7.0 的对抗用例覆盖：
 Windows PR 与正式 Release 构建会执行：
 
 1. 严格 `npm ci`，只使用仓库已提交 lockfile；
-2. JavaScript 静态语法检查；
-3. Runtime updater 功能测试；
-4. Runtime updater 红蓝安全测试；
-5. 实时核对安装包内 DSH 与官方 stable；
-6. 源码级从官方 npm 下载 Runtime，执行 integrity / OSV、自检与激活；
-7. 插件市场功能测试；
-8. 插件市场红蓝测试；
-9. NSIS Windows 安装包真实构建；
-10. packaged smoke；
-11. bundled pnpm / `dsh plugin` / offline skins 验证；
-12. **安装后的正式候选 EXE** 从官方 Registry 下载并激活 Runtime；
-13. 安装后的实时插件市场 + 安全预检；
-14. 连续 **3 轮** 清洁安装 → 冷启动 → 二次启动 → 静默卸载；
-15. 安装包 / unpacked runtime 审计；
-16. 全部成功后才允许创建 GitHub Release。
+2. 还原并校验正式桌面图标（PNG / 256×256 / byte size / SHA-256）；
+3. JavaScript 静态语法检查；
+4. Runtime updater 功能测试；
+5. Runtime updater 红蓝安全测试；
+6. 实时核对安装包内 DSH 与官方 stable；
+7. 源码级从官方 npm 下载 Runtime，执行 integrity / OSV、自检与激活；
+8. 插件市场功能测试；
+9. 插件市场红蓝测试；
+10. NSIS Windows 安装包真实构建；
+11. packaged smoke；
+12. bundled pnpm / `dsh plugin` / offline skins 验证；
+13. **安装后的正式候选 EXE** 从官方 Registry 下载并激活 Runtime；
+14. 安装后的实时插件市场 + 安全预检；
+15. 连续 **3 轮** 清洁安装 → 冷启动 → 二次启动 → 静默卸载；
+16. 安装包 / unpacked runtime 审计；
+17. 全部成功后才允许创建 GitHub Release。
 
 ### 体积策略
 
@@ -281,7 +310,7 @@ npm run audit:package
 ## 常见问题
 
 **以后 DeepSeek Harness 更新，还需要重新下载整个 Desktop 吗？**  
-通常不需要。v0.7.0 已将 DSH Runtime 与桌面壳解耦，新 Runtime 会通过安全更新链独立暂存与激活。桌面 UI / Electron 本身更新时仍需安装新的 Desktop Release。
+通常不需要。DSH Runtime 已与桌面壳解耦，新 Runtime 会通过安全更新链独立暂存与激活。桌面 UI / Electron 本身更新时仍需安装新的 Desktop Release。
 
 **Runtime 更新失败会不会把应用弄坏？**  
 更新不会直接覆盖当前 Runtime。候选必须通过隔离 Web 自检和真实 Profile 预检；失败时继续使用上一版本或安装包内置 DSH。
