@@ -19,6 +19,20 @@ foreach ($dir in @($installDir, $runtimeRoot, $dshHome)) {
   if (Test-Path $dir) { Remove-Item $dir -Recurse -Force }
 }
 
+function Show-RuntimeDiagnostics {
+  param([string]$Root)
+  $statePath = Join-Path $Root 'state.json'
+  $runtimeLog = Join-Path $Root 'runtime-update.log'
+  if (Test-Path $statePath) {
+    Write-Host '[runtime-e2e] ----- state.json -----'
+    Get-Content $statePath | ForEach-Object { Write-Host $_ }
+  }
+  if (Test-Path $runtimeLog) {
+    Write-Host '[runtime-e2e] ----- runtime-update.log -----'
+    Get-Content $runtimeLog | ForEach-Object { Write-Host $_ }
+  }
+}
+
 Write-Host "[runtime-e2e] [$Label] installing -> $installDir"
 $install = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$installDir") -PassThru -Wait
 if ($install.ExitCode -ne 0) { throw "[$Label] NSIS install failed with exit code $($install.ExitCode)" }
@@ -40,12 +54,14 @@ try {
     Wait-Process -Id $process.Id -Timeout 300 -ErrorAction Stop
   } catch {
     Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
+    Show-RuntimeDiagnostics -Root $runtimeRoot
     throw "[$Label] runtime updater smoke timed out"
   }
   $process.Refresh()
   if (Test-Path $stdout) { Get-Content $stdout | ForEach-Object { Write-Host $_ } }
   if ($process.ExitCode -ne 0) {
     if (Test-Path $stderr) { Get-Content $stderr | ForEach-Object { Write-Host $_ } }
+    Show-RuntimeDiagnostics -Root $runtimeRoot
     throw "[$Label] runtime updater smoke failed with exit code $($process.ExitCode)"
   }
 
