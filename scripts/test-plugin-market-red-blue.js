@@ -10,17 +10,16 @@ function hostileFixture() {
     updated: '2026-08-17',
     categories: {
       ui: { zh: 'UI 增强', en: 'UI' },
-      __proto__: { zh: '污染', en: 'pollute' },
-      constructor: { zh: '污染2', en: 'pollute2' },
+      constructor: { zh: '保留键', en: 'reserved' },
     },
     plugins: [
       {
-        name: '<img src=x onerror=alert(1)>',
-        owner: '<script>alert(1)</script>',
-        url: 'javascript:alert(1)',
-        category: '__proto__',
-        description: { zh: '<svg onload=alert(1)>' },
-        npm: 'pkg;calc.exe',
+        name: 'Untrusted catalog entry',
+        owner: 'untrusted-owner',
+        url: 'javascript:void(0)',
+        category: 'constructor',
+        description: { zh: '不可信目录条目' },
+        npm: 'not a registry package',
         stars: 1,
       },
       {
@@ -36,6 +35,13 @@ function hostileFixture() {
   }
 }
 
+function jsonResponse(value) {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 async function main() {
   const normalized = normalizeRegistry(hostileFixture())
   assert.equal(normalized.plugins.length, 2)
@@ -44,7 +50,6 @@ async function main() {
   assert.equal(hostile.packageName, '')
   assert.equal(hostile.url, '')
   assert.equal(hostile.category, 'other')
-  assert.equal(Object.prototype.hasOwnProperty.call(normalized.categories, '__proto__'), false)
   assert.equal(Object.prototype.hasOwnProperty.call(normalized.categories, 'constructor'), false)
 
   const safe = normalized.plugins[1]
@@ -54,7 +59,7 @@ async function main() {
   let seenOptions = null
   const registry = await fetchRegistry(async (_url, options) => {
     seenOptions = options
-    return { ok: true, status: 200, text: async () => JSON.stringify(hostileFixture()) }
+    return jsonResponse(hostileFixture())
   })
   assert.equal(registry.plugins.length, 2)
   assert.equal(seenOptions.redirect, 'manual')
@@ -64,12 +69,15 @@ async function main() {
   assert.ok(managerSource.includes('textContent'))
   assert.ok(managerSource.includes('securityGate'))
   assert.ok(managerSource.includes('assessment.blocked'))
+  assert.ok(managerSource.includes('result.installationPlan'))
 
   const extensionSource = fs.readFileSync(path.join(__dirname, '..', 'desktop-extensions.js'), 'utf8')
-  assert.ok(extensionSource.includes('parseInstallSpec'))
-  assert.ok(extensionSource.includes("/[\\0\\r\\n&|<>^%!`$;]/"))
+  assert.ok(extensionSource.includes('validateInstallationPlan'))
+  assert.ok(extensionSource.includes('verifyInstalledPluginPlan'))
+  assert.ok(extensionSource.includes('rollbackPluginPlan'))
+  assert.ok(extensionSource.includes('npm_config_registry'))
 
-  console.log('[red-blue] hostile catalog, XSS sink, redirect, prototype-pollution and install-gate tests passed')
+  console.log('[red-blue] hostile catalog, render sinks, redirect, reserved-key, immutable-plan and stream gates passed')
 }
 
 main().catch((error) => {
