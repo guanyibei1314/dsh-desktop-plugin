@@ -12,18 +12,23 @@
   File /oname=$PLUGINSDIR\${DSH_GIT_INSTALLER} "${BUILD_RESOURCES_DIR}\toolchain\${DSH_GIT_INSTALLER}"
 
   ReadEnvStr $9 "DSH_TOOLCHAIN_FORCE_INSTALL"
+  SetRegView 64
+
+  ; Never execute node/git through PATH from this elevated per-machine setup.
+  ; A standard user can control cwd/User PATH before approving UAC. Detection is
+  ; therefore limited to machine-owned Program Files locations; any other setup
+  ; is left untouched and the verified full system toolchain is installed.
+  StrCpy $6 "$PROGRAMFILES64\nodejs"
+  StrCpy $7 "$PROGRAMFILES64\Git"
 
   ; ---------------------------------------------------------------- Node.js
   StrCpy $8 "0"
   ${If} "$9" == "1"
     StrCpy $8 "1"
-  ${Else}
-    nsExec::ExecToStack '"$SYSDIR\cmd.exe" /D /C "node --version >NUL 2>&1"'
-    Pop $0
-    Pop $1
-    ${If} "$0" != "0"
-      StrCpy $8 "1"
-    ${EndIf}
+  ${ElseIfNot} ${FileExists} "$6\node.exe"
+    StrCpy $8 "1"
+  ${ElseIfNot} ${FileExists} "$6\npm.cmd"
+    StrCpy $8 "1"
   ${EndIf}
 
   ${If} "$8" == "1"
@@ -39,20 +44,19 @@
       ${EndIf}
     ${EndIf}
   ${Else}
-    DetailPrint "Existing Node.js found on PATH; keeping the user's existing installation."
+    DetailPrint "Trusted machine Node.js found under Program Files; keeping the existing installation."
   ${EndIf}
 
   ; ---------------------------------------------------------- Git for Windows
   StrCpy $8 "0"
   ${If} "$9" == "1"
     StrCpy $8 "1"
-  ${Else}
-    nsExec::ExecToStack '"$SYSDIR\cmd.exe" /D /C "git --version >NUL 2>&1"'
-    Pop $0
-    Pop $1
-    ${If} "$0" != "0"
-      StrCpy $8 "1"
-    ${EndIf}
+  ${ElseIfNot} ${FileExists} "$7\cmd\git.exe"
+    StrCpy $8 "1"
+  ${ElseIfNot} ${FileExists} "$7\git-bash.exe"
+    StrCpy $8 "1"
+  ${ElseIfNot} ${FileExists} "$7\cmd\git-gui.exe"
+    StrCpy $8 "1"
   ${EndIf}
 
   ${If} "$8" == "1"
@@ -67,15 +71,12 @@
       Abort
     ${EndIf}
   ${Else}
-    DetailPrint "Existing Git found on PATH; keeping the user's existing installation."
+    DetailPrint "Trusted machine Git for Windows found under Program Files; keeping the existing installation."
   ${EndIf}
 
   ; Refresh this installer process from the persisted Machine + User PATH so a
   ; DSH Desktop process launched immediately from the final setup page inherits
   ; the newly installed Node/Git paths. Explorer/other apps are notified too.
-  ; NSIS ReadRegStr can read REG_EXPAND_SZ; expand any %SystemRoot%-style
-  ; references explicitly before assigning the current process environment.
-  SetRegView 64
   ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
   ReadRegStr $1 HKCU "Environment" "Path"
   ExpandEnvStrings $0 $0
