@@ -4,6 +4,7 @@ const PACKAGE_NAME = '@deepseek-ai/dsh'
 const REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const REGISTRY_URL = `${REGISTRY_ORIGIN}/@deepseek-ai%2Fdsh`
 const OSV_URL = 'https://api.osv.dev/v1/query'
+const EXPECTED_REPOSITORY = 'https://github.com/deepseek-ai/deepseek-harness'
 
 function isSafeVersion(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 80) return false
@@ -51,10 +52,36 @@ function isHttpsRegistryTarball(value) {
   if (typeof value !== 'string' || value.length > 1000) return false
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname === 'registry.npmjs.org' && url.username === '' && url.password === ''
+    return url.protocol === 'https:' && url.origin === REGISTRY_ORIGIN && url.username === '' && url.password === ''
   } catch (err) {
     return false
   }
+}
+
+function normalizeRepository(value) {
+  const raw = value && typeof value === 'object' ? value.url : value
+  if (typeof raw !== 'string' || raw.length > 1000) return ''
+  try {
+    const parsed = new URL(raw.replace(/^git\+/, ''))
+    if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') return ''
+    return `${parsed.origin}${parsed.pathname.replace(/\.git$/i, '').replace(/\/$/, '')}`
+  } catch (_) {
+    return ''
+  }
+}
+
+function normalizeAttestations(dist) {
+  const raw = dist && typeof dist.attestations === 'object' && dist.attestations ? dist.attestations : null
+  if (!raw) return null
+  let url = ''
+  try {
+    const parsed = new URL(raw.url)
+    if (parsed.protocol === 'https:' && parsed.origin === REGISTRY_ORIGIN && !parsed.username && !parsed.password) url = parsed.href
+  } catch (_) { /* invalid */ }
+  const provenance = raw.provenance && typeof raw.provenance === 'object' ? raw.provenance : null
+  const predicateType = provenance && typeof provenance.predicateType === 'string' ? provenance.predicateType.slice(0, 500) : ''
+  if (!url || !/provenance/i.test(predicateType)) return null
+  return { url, predicateType }
 }
 
 function hasLifecycleScripts(pkg) {
@@ -83,12 +110,17 @@ function normalizeRegistryRelease(metadata, channel = 'stable') {
     throw new Error('registry package is missing sha512 integrity')
   }
   if (!isHttpsRegistryTarball(dist.tarball)) throw new Error('registry tarball URL is not trusted')
+  const repository = normalizeRepository(pkg.repository)
+  if (repository !== EXPECTED_REPOSITORY) throw new Error('registry package repository identity mismatch')
+  const attestations = normalizeAttestations(dist)
   const publishedAt = metadata.time && typeof metadata.time[version] === 'string' ? metadata.time[version] : null
   return {
     packageName: PACKAGE_NAME,
     version,
     integrity: dist.integrity,
     tarball: dist.tarball,
+    repository,
+    attestations,
     publishedAt,
     deprecated: typeof pkg.deprecated === 'string' && pkg.deprecated.trim() ? pkg.deprecated.trim().slice(0, 500) : null,
     lifecycleScripts: hasLifecycleScripts(pkg),
@@ -120,6 +152,7 @@ function shouldCheck(lastCheckedAt, now = Date.now(), intervalMs = 24 * 60 * 60 
 }
 
 module.exports = {
+  EXPECTED_REPOSITORY,
   PACKAGE_NAME,
   REGISTRY_ORIGIN,
   REGISTRY_URL,
@@ -128,8 +161,10 @@ module.exports = {
   isDshBinArgument,
   isHttpsRegistryTarball,
   isSafeVersion,
+  normalizeAttestations,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRepository,
   parseVersion,
   selectRegistryTag,
   shouldCheck,
