@@ -14,6 +14,13 @@ const {
   selectRegistryTag,
   shouldCheck,
 } = require('../runtime-update-core')
+const {
+  expectedReleaseTag,
+  officialReleaseApiUrl,
+  officialSourcePackageApiUrl,
+  normalizeOfficialGitHubRelease,
+  normalizeOfficialSourcePackage,
+} = require('../runtime-publisher-auth')
 
 function versionFixture(version, integrity) {
   return {
@@ -46,6 +53,29 @@ function fixture() {
   }
 }
 
+function githubReleaseFixture(version = '0.1.0-rc.7') {
+  return {
+    tag_name: `dsh-v${version}`,
+    draft: false,
+    immutable: true,
+    published_at: '2026-08-21T12:35:00Z',
+    html_url: `https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v${version}`,
+  }
+}
+
+function githubSourceFixture(version = '0.1.0-rc.7') {
+  const pkg = {
+    name: PACKAGE_NAME,
+    version,
+    repository: { url: 'git+https://github.com/deepseek-ai/deepseek-harness.git' },
+  }
+  return {
+    type: 'file',
+    encoding: 'base64',
+    content: Buffer.from(JSON.stringify(pkg)).toString('base64'),
+  }
+}
+
 assert.strictEqual(compareVersions('0.1.0-rc.6', '0.1.0-rc.7'), -1)
 assert.strictEqual(compareVersions('0.1.0-rc.10', '0.1.0-rc.7'), 1)
 assert.strictEqual(compareVersions('0.1.0', '0.1.0-rc.99'), 1)
@@ -68,6 +98,17 @@ assert.strictEqual(release.attestations.predicateType, 'https://slsa.dev/provena
 assert.strictEqual(release.lifecycleScripts, false)
 assert.ok(release.integrity.startsWith('sha512-'))
 
+assert.strictEqual(expectedReleaseTag('0.1.0-rc.7'), 'dsh-v0.1.0-rc.7')
+assert.strictEqual(officialReleaseApiUrl('0.1.0-rc.7'), 'https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/tags/dsh-v0.1.0-rc.7')
+assert.strictEqual(officialSourcePackageApiUrl('0.1.0-rc.7'), 'https://api.github.com/repos/deepseek-ai/deepseek-harness/contents/apps/cli/package.json?ref=dsh-v0.1.0-rc.7')
+const ghRelease = normalizeOfficialGitHubRelease(githubReleaseFixture(), '0.1.0-rc.7')
+assert.strictEqual(ghRelease.tag, 'dsh-v0.1.0-rc.7')
+assert.strictEqual(ghRelease.immutable, true)
+const ghPkg = normalizeOfficialSourcePackage(githubSourceFixture(), '0.1.0-rc.7')
+assert.strictEqual(ghPkg.name, PACKAGE_NAME)
+assert.strictEqual(ghPkg.version, '0.1.0-rc.7')
+assert.strictEqual(ghPkg.repository, EXPECTED_REPOSITORY)
+
 assert.deepStrictEqual(normalizeOsvResponse({ vulns: [{ id: 'GHSA-test' }, { id: 'GHSA-test' }, { id: 'OSV-2', withdrawn: '2026-01-01' }] }), ['GHSA-test'])
 assert.strictEqual(isDshBinArgument('C:\\app\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'), true)
 assert.strictEqual(isDshBinArgument('/tmp/node_modules/@deepseek-ai/dsh/lib/bin.js'), true)
@@ -76,4 +117,4 @@ assert.strictEqual(shouldCheck(null, Date.now()), true)
 assert.strictEqual(shouldCheck(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(), Date.now()), true)
 assert.strictEqual(shouldCheck(new Date().toISOString(), Date.now()), false)
 
-console.log('[runtime-update] functional publisher identity/provenance metadata tests passed')
+console.log('[runtime-update] functional npm provenance + immutable GitHub publisher identity tests passed')
