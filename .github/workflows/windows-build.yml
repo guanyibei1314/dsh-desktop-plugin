@@ -31,6 +31,9 @@ jobs:
       - name: Toolchain manifest security checks
         run: npm run test:toolchain-manifest
 
+      - name: Verify pinned full toolchain matches official latest
+        run: npm run verify:official-toolchain
+
       - name: Static syntax checks
         run: npm run check
 
@@ -80,6 +83,7 @@ jobs:
         run: |
           foreach ($script in @(
             'scripts/fetch-toolchain.ps1',
+            'scripts/verify-official-toolchain.ps1',
             'scripts/verify-installed-toolchain.ps1',
             'scripts/verify-installed-app.ps1',
             'scripts/verify-installed-market.ps1',
@@ -116,7 +120,7 @@ jobs:
       - name: Verify packaged plugin runtime and offline bundled skins
         run: npm run verify:packaged-plugin
 
-      - name: Verify installed full Node.js Git and persisted PATH
+      - name: Verify installed full Node.js Git and Machine PATH
         shell: pwsh
         run: |
           $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
@@ -154,8 +158,9 @@ jobs:
 
       - name: Audit installer and unpacked runtime
         env:
-          # v0.9.0 intentionally embeds the official full Node MSI and full Git
-          # for Windows installer. Keep a hard cap instead of removing size gates.
+          # v0.9.0 intentionally embeds official full Node.js and full Git for
+          # Windows installers. Preserve a hard size ceiling instead of dropping
+          # package-size control just because the product scope grew.
           DSH_MAX_INSTALLER_MIB: '230'
           DSH_BASELINE_INSTALLER_BYTES: '130173608'
           DSH_MAX_INSTALLER_GROWTH_MIB: '110'
@@ -194,9 +199,9 @@ jobs:
           retention-days: 7
 
   publish:
-    # Public release only after the full toolchain install/PATH gate, official
-    # Runtime update chain, maintenance safety, red-blue gates, live market
-    # security and repeated installed-app E2E all pass.
+    # Public release only after the full system toolchain install/PATH gate,
+    # official Runtime update chain, maintenance safety, red-blue gates, live
+    # market security and repeated installed-app E2E all pass.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
     runs-on: ubuntu-latest
@@ -236,11 +241,12 @@ jobs:
           零配置 DeepSeek Harness 桌面端。
 
           ### 本版重点
-          - 安装包内置并安装官方完整 Node.js 24.19.0 LTS x64 MSI，不使用便携版；已有可用 Node 时默认保留用户现有安装。
-          - 安装包内置并安装官方完整 Git for Windows 2.55.0(3) x64 安装器，不使用 MinGit；已有可用 Git 时默认保留用户现有安装。
-          - Node/Git 安装器固定官方来源、版本和 SHA-256，构建时同时校验 Authenticode 签名，来源或哈希不符直接阻断发布。
-          - Node.js 和 Git 由官方安装器持久化到 Windows PATH；Git 使用安全的 Cmd PATH 模式，避免 Unix find/sort 等工具覆盖 Windows 同名命令。
-          - 新增真实安装 E2E：强制安装完整 Node/Git，核对 Program Files 二进制版本、Machine/User PATH、新 shell 命令解析，并验证卸载 DSH 不会删除独立 Node/Git。
+          - 安装包内嵌并安装官方完整 Node.js 24.19.0 LTS x64 MSI，不使用便携版；已有可用 Node 时默认保留用户现有安装。
+          - 安装包内嵌并安装官方完整 Git for Windows 2.55.0(5) x64 安装器，不使用 MinGit；已有可用 Git 时默认保留用户现有安装。
+          - 构建时实时核对 Node 最新 LTS 与 Git for Windows latest tag；固定官方来源、版本和 SHA-256，并校验 Authenticode，任一不符直接阻断发布。
+          - v0.9.0 Windows 安装改为 per-machine，一次 UAC 后由官方 Node/Git 安装器写入 Machine PATH；Git 使用安全的 Cmd PATH 模式，避免 Unix find/sort 等工具覆盖 Windows 同名命令。
+          - 安装器写入工具链后立即从注册表刷新自身 PATH，并广播 Environment 变更，避免安装完成后第一次启动 DSH/终端仍继承旧 PATH。
+          - 新增真实安装 E2E：强制安装完整 Node/Git，核对 Program Files 二进制版本、Machine PATH、新 shell 命令解析，并验证卸载 DSH 不会删除独立 Node/Git。
           - v0.8.0 的 Runtime GUI、安全自动更新、junction-aware 清理、Runtime GC、插件市场与红蓝安全门禁全部保留。
 
           ### Windows 安装包 SHA-256
