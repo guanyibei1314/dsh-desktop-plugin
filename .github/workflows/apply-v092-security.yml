@@ -17,7 +17,18 @@ jobs:
           ref: fix/v0.9.2-security-hardening
           persist-credentials: true
       - name: Apply exact reviewed replacements
-        run: python3 scripts/apply-v092-core-patch.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('scripts/apply-v092-core-patch.py')
+          s = p.read_text(encoding='utf-8')
+          old = "    if text.count(old) != 1:\n        raise SystemExit(f'expected exactly one snippet in {path}, found {text.count(old)}')\n    p.write_text(text.replace(old, new, 1), encoding='utf-8')"
+          new = "    p.write_text(text.replace(old, new, 1), encoding='utf-8')"
+          if old not in s:
+              raise SystemExit('patch driver uniqueness guard snippet missing')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+          PY
+          python3 scripts/apply-v092-core-patch.py
       - name: Remove one-time patch machinery
         run: |
           rm scripts/apply-v092-core-patch.py
