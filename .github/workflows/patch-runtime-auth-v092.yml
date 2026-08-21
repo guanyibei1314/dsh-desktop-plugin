@@ -1,0 +1,130 @@
+name: Patch v0.9.2 Runtime publisher auth once
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'fix/v0.9.2-security-hardening'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout controlled branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/v0.9.2-security-hardening
+          persist-credentials: true
+      - name: Patch Runtime publisher verification
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('runtime-manager.js')
+          s = p.read_text(encoding='utf-8')
+          anchor = "const { readJsonLimited } = require('./secure-fetch')\n"
+          addition = "const {\n  officialReleaseApiUrl,\n  officialSourcePackageApiUrl,\n  normalizeOfficialGitHubRelease,\n  normalizeOfficialSourcePackage,\n} = require('./runtime-publisher-auth')\n"
+          if addition not in s:
+              if s.count(anchor) != 1: raise SystemExit('secure-fetch import anchor mismatch')
+              s = s.replace(anchor, anchor + addition, 1)
+          const_anchor = "const MAX_OSV_BYTES = 2 * 1024 * 1024\n"
+          const_add = "const MAX_GITHUB_RELEASE_BYTES = 2 * 1024 * 1024\nconst MAX_GITHUB_SOURCE_BYTES = 1024 * 1024\n"
+          if const_add not in s:
+              if s.count(const_anchor) != 1: raise SystemExit('constant anchor mismatch')
+              s = s.replace(const_anchor, const_anchor + const_add, 1)
+          start = s.index('async function verifyRuntimeProvenance(')
+          end = s.index('\nasync function installOfficialVersion(', start)
+          replacement = r'''async function verifyOfficialGitHubRelease(release) {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    'x-github-api-version': '2022-11-28',
+  }
+  const releaseBody = await fetchJson(officialReleaseApiUrl(release.version), {
+    method: 'GET', headers,
+  }, MAX_GITHUB_RELEASE_BYTES)
+  const normalizedRelease = normalizeOfficialGitHubRelease(releaseBody, release.version)
+  const sourceBody = await fetchJson(officialSourcePackageApiUrl(release.version), {
+    method: 'GET', headers,
+  }, MAX_GITHUB_SOURCE_BYTES)
+  normalizeOfficialSourcePackage(sourceBody, release.version)
+  appendLog(`verified immutable official GitHub release ${normalizedRelease.tag} source=${EXPECTED_REPOSITORY}`)
+  return normalizedRelease
+}
+
+async function verifyRuntimePublisherAuthenticity(release, installed) {
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+  const npmCli = systemNpmCliPath()
+  if (!npmCli) throw new Error('trusted npm CLI is unavailable for publisher verification')
+
+  const verifyRoot = path.join(runtimeRoot(), 'publisher-verify', `${release.version}-${Date.now()}`)
+  fs.mkdirSync(verifyRoot, { recursive: true })
+  fs.writeFileSync(path.join(verifyRoot, 'package.json'), JSON.stringify({
+    name: 'dsh-runtime-publisher-verifier',
+    private: true,
+    version: '0.0.0',
+    dependencies: { [PACKAGE_NAME]: release.version },
+  }, null, 2), 'utf8')
+  try {
+    await runNpmCli(npmCli, [
+      'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact',
+      `--registry=${REGISTRY_ORIGIN}/`,
+    ], verifyRoot)
+
+    const lock = readJson(path.join(verifyRoot, 'package-lock.json'))
+    const lockEntry = lock && lock.packages && lock.packages[`node_modules/${PACKAGE_NAME}`]
+    if (!lockEntry || lockEntry.version !== release.version || lockEntry.integrity !== release.integrity) {
+      throw new Error('publisher verification workspace does not match expected DSH version/integrity')
+    }
+    const rootPkg = readJson(path.join(verifyRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+    if (!rootPkg || normalizeRepository(rootPkg.repository) !== EXPECTED_REPOSITORY) {
+      throw new Error('publisher verification package repository does not match expected DeepSeek source')
+    }
+
+    const auditArgs = ['audit', 'signatures', '--json', `--registry=${REGISTRY_ORIGIN}/`]
+    if (release.attestations) auditArgs.splice(3, 0, '--include-attestations')
+    const audited = await runNpmCli(npmCli, auditArgs, verifyRoot)
+    let report
+    try { report = JSON.parse(audited.stdout) } catch (_) { throw new Error('npm audit signatures returned invalid JSON') }
+    if (!report || typeof report !== 'object') throw new Error('npm audit signatures returned an invalid report')
+    if (Array.isArray(report.invalid) && report.invalid.length > 0) throw new Error('npm registry signature verification reported invalid signatures')
+    if (Array.isArray(report.missing) && report.missing.length > 0) throw new Error('npm registry signature verification reported missing signatures')
+
+    if (release.attestations) {
+      const verified = Array.isArray(report.verified) ? report.verified : []
+      const payloads = decodedProvenancePayloads(verified)
+      const rootProvenance = payloads.some((payload) =>
+        /provenance/i.test(payload) && payload.includes(PACKAGE_NAME) && payload.includes(release.version))
+      if (!rootProvenance) {
+        throw new Error('verified Sigstore provenance for exact @deepseek-ai/dsh release was not found')
+      }
+      appendLog(`verified npm registry signatures + Sigstore provenance for ${release.version} source=${EXPECTED_REPOSITORY}`)
+    } else {
+      await verifyOfficialGitHubRelease(release)
+      appendLog(`verified npm registry signatures + immutable GitHub source identity for ${release.version}`)
+    }
+    return true
+  } finally {
+    try { fs.rmSync(verifyRoot, { recursive: true, force: true }) } catch (_) { /* best effort */ }
+  }
+}
+'''
+          s = s[:start] + replacement + s[end:]
+          old_call = 'await verifyRuntimeProvenance(release, installed)'
+          if s.count(old_call) != 1: raise SystemExit(f'publisher call anchor mismatch: {s.count(old_call)}')
+          s = s.replace(old_call, 'await verifyRuntimePublisherAuthenticity(release, installed)', 1)
+          p.write_text(s, encoding='utf-8')
+      - name: Remove one-time workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/patch-runtime-auth-v092.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime-manager.js .github/workflows/patch-runtime-auth-v092.yml
+          git diff --cached --check
+          git commit -m "security: verify immutable upstream release without npm provenance"
+          git push origin HEAD:fix/v0.9.2-security-hardening
