@@ -5,6 +5,10 @@ const REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const REGISTRY_URL = `${REGISTRY_ORIGIN}/@deepseek-ai%2Fdsh`
 const OSV_URL = 'https://api.osv.dev/v1/query'
 const EXPECTED_REPOSITORY = 'https://github.com/deepseek-ai/deepseek-harness'
+const SLSA_PROVENANCE_PREDICATES = new Set([
+  'https://slsa.dev/provenance/v0.2',
+  'https://slsa.dev/provenance/v1',
+])
 
 function isSafeVersion(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 80) return false
@@ -79,8 +83,8 @@ function normalizeAttestations(dist) {
     if (parsed.protocol === 'https:' && parsed.origin === REGISTRY_ORIGIN && !parsed.username && !parsed.password) url = parsed.href
   } catch (_) { /* invalid */ }
   const provenance = raw.provenance && typeof raw.provenance === 'object' ? raw.provenance : null
-  const predicateType = provenance && typeof provenance.predicateType === 'string' ? provenance.predicateType.slice(0, 500) : ''
-  if (!url || !/provenance/i.test(predicateType)) return null
+  const predicateType = provenance && typeof provenance.predicateType === 'string' ? provenance.predicateType.trim().slice(0, 500) : ''
+  if (!url || !SLSA_PROVENANCE_PREDICATES.has(predicateType)) return null
   return { url, predicateType }
 }
 
@@ -157,6 +161,7 @@ module.exports = {
   REGISTRY_ORIGIN,
   REGISTRY_URL,
   OSV_URL,
+  SLSA_PROVENANCE_PREDICATES,
   compareVersions,
   isDshBinArgument,
   isHttpsRegistryTarball,
