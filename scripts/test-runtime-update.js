@@ -1,6 +1,7 @@
 'use strict'
 
 const assert = require('assert')
+const { createSign, generateKeyPairSync } = require('crypto')
 const {
   EXPECTED_REPOSITORY,
   PACKAGE_NAME,
@@ -15,12 +16,37 @@ const {
   shouldCheck,
 } = require('../runtime-update-core')
 const {
+  REGISTRY_KEYS_URL,
   expectedReleaseTag,
   officialReleaseApiUrl,
   officialSourcePackageApiUrl,
   normalizeOfficialGitHubRelease,
   normalizeOfficialSourcePackage,
+  normalizeRegistryKeys,
+  verifyNpmRegistrySignature,
 } = require('../runtime-publisher-auth')
+
+const registryKeyPair = generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+const registryPublicKey = registryKeyPair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64')
+const registryKeyId = 'SHA256:VGVzdFJlZ2lzdHJ5U2lnbmluZ0tleQ=='
+
+function signRelease(version, integrity) {
+  const signer = createSign('SHA256')
+  signer.end(`${PACKAGE_NAME}@${version}:${integrity}`)
+  return signer.sign(registryKeyPair.privateKey).toString('base64')
+}
+
+function registryKeysFixture(expires = null) {
+  return {
+    keys: [{
+      expires,
+      keyid: registryKeyId,
+      keytype: 'ecdsa-sha2-nistp256',
+      scheme: 'ecdsa-sha2-nistp256',
+      key: registryPublicKey,
+    }],
+  }
+}
 
 function versionFixture(version, integrity) {
   return {
@@ -30,6 +56,7 @@ function versionFixture(version, integrity) {
     dist: {
       integrity,
       tarball: `https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-${version}.tgz`,
+      signatures: [{ keyid: registryKeyId, sig: signRelease(version, integrity) }],
       attestations: {
         url: `https://registry.npmjs.org/-/npm/v1/attestations/@deepseek-ai%2fdsh@${version}`,
         provenance: { predicateType: 'https://slsa.dev/provenance/v1' },
@@ -97,6 +124,12 @@ assert.strictEqual(release.repository, EXPECTED_REPOSITORY)
 assert.strictEqual(release.attestations.predicateType, 'https://slsa.dev/provenance/v1')
 assert.strictEqual(release.lifecycleScripts, false)
 assert.ok(release.integrity.startsWith('sha512-'))
+assert.strictEqual(release.signatures.length, 1)
+assert.strictEqual(REGISTRY_KEYS_URL, 'https://registry.npmjs.org/-/npm/v1/keys')
+assert.strictEqual(normalizeRegistryKeys(registryKeysFixture()).length, 1)
+const registryVerification = verifyNpmRegistrySignature(release, registryKeysFixture())
+assert.strictEqual(registryVerification.keyid, registryKeyId)
+assert.strictEqual(registryVerification.message, `${PACKAGE_NAME}@0.1.0-rc.7:sha512-QUJDREVGR0g=`)
 
 assert.strictEqual(expectedReleaseTag('0.1.0-rc.7'), 'dsh-v0.1.0-rc.7')
 assert.strictEqual(officialReleaseApiUrl('0.1.0-rc.7'), 'https://api.github.com/repos/deepseek-ai/deepseek-harness/releases/tags/dsh-v0.1.0-rc.7')
@@ -117,4 +150,4 @@ assert.strictEqual(shouldCheck(null, Date.now()), true)
 assert.strictEqual(shouldCheck(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(), Date.now()), true)
 assert.strictEqual(shouldCheck(new Date().toISOString(), Date.now()), false)
 
-console.log('[runtime-update] functional npm provenance + immutable GitHub publisher identity tests passed')
+console.log('[runtime-update] functional exact npm Registry signature + provenance/immutable GitHub identity tests passed')
