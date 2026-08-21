@@ -1,246 +1,211 @@
 # DSH Desktop
 
-> 类似 **Codex 桌面端** 的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 原生桌面客户端。
+> DeepSeek Harness 原生 Windows 桌面客户端。
 
 ![Electron](https://img.shields.io/badge/Electron-43-47848f?logo=electron&logoColor=white)
-![Platform](https://img.shields.io/badge/当前安装包-Windows_x64-0d1117)
+![Platform](https://img.shields.io/badge/Release-Windows_x64-0d1117)
+![Version](https://img.shields.io/badge/Version-0.9.1-3fb950)
 ![License](https://img.shields.io/badge/License-MIT-d9a441)
-![Version](https://img.shields.io/badge/Version-0.8.0-3fb950)
-
-**零配置，开箱即用。** 安装后直接运行，无需系统安装 Node.js / pnpm / DSH CLI。应用优先连接显式指定的 DSH 服务；没有则自动启动随安装包交付并经过验证的官方 DeepSeek Harness Runtime。
-
-v0.8.0 在 v0.7.x 的安全 Runtime 自动更新、实时插件市场、安全预检、Skin Center 与正式桌面图标基础上，补齐 **Runtime 更新 GUI** 和 **Runtime 维护闭环**：用户可以看到更新状态、切换通道、手动检查/回滚；后台可以安全清理 junction-containing smoke Profile 和未使用 Runtime；正式 Release 同时发布最终 EXE SHA-256。
 
 ## 立即下载
 
-### Windows x64
+### Windows x64 — v0.9.1
 
-**[下载 DSH Desktop v0.8.0 安装包](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.8.0/DSH-Desktop-Setup-0.8.0.exe)**
+**[下载 DSH Desktop v0.9.1](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.9.1/DSH-Desktop-Setup-0.9.1.exe)**
 
-Release 页面：
+Release：
 
-**https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.8.0**
+**https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.9.1**
 
-当前正式发行目标仍为 **Windows x64**。v0.8.0 **没有扩展 Linux 发布链**；macOS / Linux 正式发布属于后续独立范围。
-
-## v0.8.0 重点
-
-### 1. Runtime 更新 GUI
-
-入口：
-
-- **选项 -> DSH Runtime 更新**
-- 托盘 -> **Runtime 更新**
-
-可以查看：
-
-- 当前 Runtime 与来源；
-- 安装包 bundled fallback；
-- 最近一次检查到的官方版本；
-- previous / pending / blocked；
-- 最近检查时间与最近激活时间；
-- 当前 managed Runtime 列表。
-
-可以操作：
-
-- Stable / Latest 更新通道；
-- 自动更新开关；
-- 立即检查；
-- 手动回滚；
-- 重启并应用；
-- 打开 Runtime 数据目录。
-
-Runtime 控制面板是独立本地 sandbox 窗口。DSH Web **不会**因此获得 Runtime 管理权限。
-
-### 2. 长时间运行也会继续检查 Runtime 更新
-
-应用运行期间会定期重新触发更新检查门禁；现有 `shouldCheck` 仍控制实际 24 小时联网周期，因此不是“每小时下载一次”。
-
-更新链保持：
+SHA-256 请以 Release Notes 与：
 
 ```text
-官方 npm Registry
-      ↓
-包名 / SemVer / 官方 HTTPS tarball
-      ↓
-sha512 integrity
-      ↓
-OSV（不可评估 fail-closed）
-      ↓
-禁用 lifecycle scripts
-      ↓
-managed runtime store
-      ↓
-isolated dsh web probe
-      ↓
-pending
-      ↓
-下次启动真实 Profile preflight
-      ├─ 成功 -> activate
-      └─ 失败 -> previous / bundled fallback
+DSH-Desktop-Setup-0.9.1.exe.sha256
 ```
 
-新 Runtime 不覆盖 `app.asar` 或安装目录，也不会为了更新强制中断当前会话。
+为唯一权威来源。不要把 GitHub Actions artifact ZIP digest 当成安装包 EXE SHA-256。
 
-### 3. junction-aware Runtime 维护
+## v0.9.1：安装后直接拥有完整 Node.js + Git
 
-v0.8.0 重新启用旧 smoke Profile 清理，但不再使用可能穿透 Windows junction 的危险递归删除。
-
-规则：
-
-- 删除路径必须位于允许的 Runtime boundary 内；
-- 普通目录才递归；
-- junction / symlink 只解除链接本身；
-- 不进入链接指向的外部目标；
-- 旧 smoke Profile 超过 24 小时才清理。
-
-CI 会真实创建一个指向 Runtime root 外部的 Windows junction，并要求外部 `sentinel.txt` 在清理后仍存在。
-
-### 4. managed Runtime 自动 GC
-
-自动保留：
+这一版不是把 portable 工具偷偷放进 DSH 目录，而是把两个官方完整 Windows 安装器一起交付：
 
 ```text
-active
-previous
-pending
+Node.js 24.19.0 LTS x64 MSI
+Git for Windows 2.55.0(5) x64 full installer
 ```
 
-其他长期未引用 Runtime 会从 `userData/dsh-runtime/versions/` 清理，避免版本目录无限累积。
+### Node.js
 
-### 5. 正式安装包 SHA-256
+- 完整官方 Node.js LTS，不是 portable；
+- Node 缺失时由 DSH Setup 自动安装；
+- npm 一并安装；
+- 官方 MSI 把 Node 写入 Windows **Machine PATH**；
+- 已经有可用 Node 时默认保留用户现有环境。
 
-Windows Release 流程现在会：
+### Git for Windows
 
-1. 对最终 EXE 计算 SHA-256；
-2. 生成 `DSH-Desktop-Setup-<version>.exe.sha256`；
-3. 把 checksum 与 EXE 一起作为已验证 artifact 传给 publish；
-4. publish 前执行 `sha256sum -c`；
-5. `.sha256` 与 EXE 一起发布；
-6. Release Notes 写入最终 EXE SHA-256。
+- 完整 Git for Windows，不是 MinGit / PortableGit；
+- Git 缺失时自动安装；
+- 包含并已在 CI 真实验证：Git Bash、Git GUI、Git LFS；
+- 使用官方安全 `Cmd` PATH 模式，把 Git cmd wrapper 写入 **Machine PATH**，不让 Unix `find/sort` 等命令覆盖 Windows 同名工具；
+- 已经有可用 Git 时默认保留用户现有环境。
 
-不要把 GitHub Actions artifact ZIP digest 当作安装包 SHA-256。
+### DSH 卸载不会删除 Node/Git
 
-## 功能特性
+Node/Git 被视为独立系统开发工具。CI 会安装它们、卸载 DSH Desktop，然后再次验证 Node、Git、Git Bash 仍然存在。
+
+## 离线安装
+
+Node/Git 不是在用户安装时临时联网下载。
+
+构建阶段会先从固定官方 HTTPS 来源取得安装器，再检查：
+
+- 当前 pinned 版本是否仍是官方 latest；
+- SHA-256；
+- Authenticode；
+- 预期签名者。
+
+通过后才嵌入 DSH Desktop NSIS payload。因此最终 Setup 本身可以离线完成 Node/Git 安装。
+
+当前固定：
+
+```text
+Node.js 24.19.0 LTS
+Git for Windows 2.55.0(5)
+```
+
+## 第一次启动也能立即找到 node/git
+
+Windows 安装器写入环境变量后，DSH Setup 会重新读取 Machine/User PATH、刷新自己的进程环境，并广播 Windows `Environment` 变更。
+
+因此从安装完成页立即启动 DSH Desktop 时，内置终端不需要先注销 Windows 才能看到：
+
+```powershell
+node --version
+npm --version
+git --version
+```
+
+## DeepSeek Harness Runtime
+
+v0.9.1 bundled / verified：
+
+```text
+@deepseek-ai/dsh@0.1.1-rc.1
+```
+
+Desktop 仍保留 v0.8.0 的 managed Runtime 更新系统：
+
+```text
+官方 npm metadata
+  -> package/SemVer/official HTTPS tarball
+  -> sha512 integrity
+  -> OSV fail-closed
+  -> lifecycle scripts disabled
+  -> isolated real dsh web probe
+  -> pending
+  -> next boot real Profile preflight
+       -> pass: activate
+       -> fail: previous/bundled fallback
+```
+
+Runtime GUI：
+
+- `选项 -> DSH Runtime 更新`
+- 托盘 -> `Runtime 更新`
+
+支持 Stable/Latest、自动更新、立即检查、回滚、blocked/pending/previous 状态和诊断。
+
+## 主要能力
 
 | 能力 | 说明 |
 | --- | --- |
-| 🖥️ 独立原生窗口 | Electron Windows 桌面窗口，位置 / 大小自动记忆 |
-| 🚀 官方 DSH Runtime | bundled fallback + 独立安全自动更新 + 双阶段自检 + 回滚 |
-| 🔄 Runtime 控制面板 | v0.8.0 新增状态、通道、自动更新、检查、回滚与诊断入口 |
-| 🧹 Runtime 自动维护 | junction-aware smoke cleanup + active/previous/pending 保护 GC |
-| 🧩 实时插件市场 | 社区实时目录、搜索 / 分类 / 排序、一键 npm 安装升级卸载 |
-| 🛡️ 插件安全预检 | npm metadata + lifecycle scripts + integrity + OSV 风险评估 |
-| 🗂️ 原生会话菜单 | 会话、运行状态、工作目录、打开目录、复制 session ID |
-| ✉️ 托盘快速发消息 | 不切回主窗口即可向已有会话提交 prompt |
-| 💻 内置终端 | xterm + node-pty，PTY 权限只属于终端页面 |
-| 🎨 内置 Skin Center | 固定版本 `@linxin666/dsh-skins` 随安装包离线交付 |
-| 🌐 内置浏览器 | `BaseWindow + WebContentsView`；远程网页无 Node / Electron 权限 |
-| 📌 Sites | 常用 Web 工具独立工作区，各自持久化浏览器分区 |
-| 🎨 原生主题 | 跟随系统 / 亮色 / 暗色 |
-| 🔔 系统通知 | 回合结束、Agent 错误通知；点击聚焦 |
-| 💤 运行中防休眠 | 会话运行时阻止系统休眠，空闲恢复 |
-| ⚡ 全局快捷键 | `Ctrl+Alt+D` 显示 / 隐藏 |
-| 🚀 开机自启 | 可选随系统登录启动 |
-| 🔁 断线自愈 | DSH 服务与事件流自动重试 / 重连 |
-| 🔒 最小权限桥接 | DSH Web 不获得 PTY / Runtime / 插件管理 / Sites 高权限 IPC |
-| 📦 运行时闭包门禁 | CI 检查 DSH、pnpm、PTY、xterm、skins 等物理 Runtime |
-| 📏 安装包审计 | 绝对体积 + 相对增长双门禁 |
+| 完整系统工具链 | v0.9.1 自动安装官方完整 Node.js + Git for Windows |
+| Machine PATH | Node/npm/Git 安装后可被新 shell 与 DSH 内置终端直接解析 |
+| 官方 DSH Runtime | bundled fallback + managed safe update + rollback |
+| Runtime GUI | 通道、自动更新、检查、回滚、状态与日志 |
+| Runtime 安全维护 | junction-aware cleanup + active/previous/pending protected GC |
+| 实时插件市场 | live community catalog + npm install/update/remove |
+| 插件安全预检 | metadata/lifecycle/integrity/OSV/risk gate |
+| Skin Center | `@linxin666/dsh-skins@0.1.18` 随包离线交付 |
+| 内置终端 | xterm + node-pty |
+| 内置浏览器 | remote content 无 Node/Electron bridge |
+| Sites | 独立持久化 Web 工作区 |
+| 托盘/通知/防休眠 | 桌面原生集成 |
 
-## 使用入口
+## v0.9.1 Windows 发布门禁
 
-- **Runtime 更新**：选项 -> `DSH Runtime 更新`
-- **插件管理 / 实时市场**：`Ctrl+Shift+P`
-- **内置浏览器**：`Ctrl+Shift+B`
-- **Sites**：`Ctrl+Shift+S`
-- **内置终端**：`Ctrl+Shift+T`
-- **Skin Center**：DSH Web 设置中的 Skin Center
+正式 PR 与 Release 路径执行：
+
+1. `npm ci`
+2. toolchain manifest source/hash tests
+3. Node latest LTS / Git for Windows latest live check
+4. JS static checks
+5. Runtime updater functional + red-blue
+6. junction/Runtime GC safety test
+7. official DSH stable verify
+8. official Runtime download + real `dsh web` activation probe
+9. plugin market functional + red-blue
+10. PowerShell E2E parse
+11. official Node/Git download + SHA-256 + Authenticode
+12. Windows per-machine NSIS build
+13. packaged application smoke
+14. packaged plugin runtime + offline skins
+15. **完整 Node/npm/Git/Git Bash/Git GUI/Git LFS/Machine PATH installed E2E**
+16. installed official Runtime update E2E
+17. installed live marketplace + security preflight
+18. **3 rounds clean install -> cold start -> restart -> uninstall**
+19. installer/runtime size audit
+20. EXE SHA-256 generation
+21. verified artifact upload
+22. publish 再执行 `sha256sum -c` 后创建 Release
+
+PR #12 最终 Windows build #73 已全部通过。
+
+## 安装包体积
+
+加入完整官方 Node/Git 后，旧 125 MiB 上限不再符合产品范围，但没有删除体积控制。
+
+当前硬上限：
+
+```text
+230 MiB
+```
+
+PR #73 候选实测：
+
+```text
+221,685,265 bytes
+211.42 MiB
+```
 
 ## 安全边界
 
-DSH Desktop 不给所有页面一个万能 preload：
+Node/Git 工具链发布可阻断：错误官方版本、非预期 URL、SHA-256 不一致、Authenticode/签名者异常、安装失败、Machine PATH 缺失或 fresh shell 无法解析。
 
-```text
-DSH Web                 -> 无桌面高权限 bridge
-Runtime settings        -> 仅本地 Runtime settings IPC
-Terminal                -> 仅 PTY bridge
-Plugin manager/market   -> 仅受限 plugin IPC
-Browser toolbar         -> 仅导航 IPC
-Remote browser content  -> 无 preload / 无 Node
-Sites manager           -> 仅 Sites CRUD / open IPC
-Site remote content     -> 无 preload / 无 Node
-Bundled skins           -> 本地 / 离线 Profile link
-Runtime updater         -> 官方源 + integrity + OSV + 双阶段自检
-Runtime maintenance     -> boundary check + lstat + junction no-traverse
-```
+Runtime/插件链也继续使用已有 fail-closed 与红蓝门禁。
 
-远程网页默认拒绝摄像头、麦克风、定位等权限申请。
-
-自动安全预检能降低已知风险，但**不等于证明第三方代码绝对安全**。它无法保证不存在 zero-day、恶意普通 JS、未来维护者账号被攻陷或延时/条件触发逻辑。
-
-## CI / 发布门禁
-
-Windows PR 与正式 Release 会执行：
-
-1. `npm ci`
-2. 正式图标 materialize + SHA/PNG/尺寸校验
-3. JavaScript 静态检查
-4. Runtime updater functional
-5. Runtime updater red-blue
-6. **Runtime maintenance junction + GC test**
-7. 官方 DSH stable 对账
-8. 官方 Runtime 下载 / 激活快速探针
-9. 插件市场 functional
-10. 插件市场 red-blue
-11. PowerShell E2E parse
-12. NSIS 正式打包
-13. packaged application smoke
-14. packaged plugin runtime + offline skins
-15. 安装后的官方 Runtime 更新 E2E
-16. 安装后的 live market + security E2E
-17. 连续 **3 轮** clean install -> cold start -> restart -> uninstall
-18. 安装包 / Runtime 体积审计
-19. 最终 EXE SHA-256 generation
-20. artifact upload
-21. 正式发布时再次校验 `.sha256` 后才创建 Release
-
-### 体积策略
-
-- 安装包绝对大小不得超过 **125 MiB**；
-- 相对已验证比较基线最多增长 **3 MiB**。
-
-任一门禁失败都不允许公开发布。
-
-## 数据位置
-
-应用 userData 中主要有：
-
-- `settings.json`：窗口、通知、自启、Runtime 更新偏好；
-- `dsh-home/`：私有 DSH Home、Profiles、插件依赖；
-- `dsh-runtime/`：managed Runtime store；
-- `dsh-runtime/state.json`：active / previous / pending / latest / blocked；
-- `dsh-runtime/runtime-update.log`：更新与维护诊断；
-- `dsh-home/desktop-bundled-web-ui.json`：bundled skins 状态；
-- `bundled-web-ui.log`：Skin Center 初始化诊断；
-- `sites.json`：Sites 列表；
-- Chromium `persist:*` partitions：Browser / Sites 独立 Web 会话。
+这些机制用于降低供应链和安装错误风险，但不等于证明所有第三方 JS、transitive dependency 或未来版本不存在 zero-day。项目不会宣称“100% 安全”。
 
 ## 从源码运行
 
-开发环境需要 Node.js；最终安装包不需要用户另外安装 Node。
+开发机器需要 Node.js：
 
 ```bash
 npm ci
 npm run check
+npm run test:toolchain-manifest
+npm run verify:official-toolchain
 npm run test:runtime-update
 npm run test:runtime-update-security
 npm run test:runtime-maintenance
 npm run test:market
 npm run test:market-security
+npm run verify:official-dsh
 npm start
 ```
 
-打包 / 本地验证：
+正式 Windows 打包：
 
 ```bash
 npm run dist
@@ -248,33 +213,16 @@ npm run verify:packaged-plugin
 npm run audit:package
 ```
 
-高级选项：`DSH_URL` 或 `--url=` 可覆盖 Harness 地址。显式指定后只连接该地址，不自动回退 bundled DSH。
+## 平台状态
 
-## 常见问题
+正式发行目标当前为 **Windows x64**。
 
-**以后 DeepSeek Harness 更新，还需要重新下载整个 Desktop 吗？**  
-通常不需要。DSH Runtime 已与桌面壳解耦；Electron/Desktop UI 自身更新时才需要新 Desktop Release。
+- Linux：当前不做正式发布链；
+- macOS：尚未建立正式发布链。
 
-**Runtime 更新失败会不会把应用弄坏？**  
-候选不会直接覆盖当前 Runtime。它必须先通过隔离 Web 自检，下一次启动再通过真实 Profile 预检；失败继续使用 previous 或 bundled Runtime。
+## 开发状态 / 接手
 
-**怎么手动回滚？**  
-打开 `选项 -> DSH Runtime 更新`，选择“回滚上一版本”，然后重启应用。没有可恢复版本时按钮会禁用或返回明确原因。
-
-**为什么还有 blocked Runtime？**  
-候选可能因 integrity、OSV、来源、lifecycle scripts、真实启动或 Profile 兼容性检查失败而被阻止。blocked 不会替换当前已验证 Runtime。
-
-**皮肤需要联网安装吗？**  
-不需要。Skin Center 与选定皮肤资产随安装包离线交付。
-
-**为什么梁神模式等没有默认塞进安装包？**  
-SSH、Remote Web、任务执行、图像理解、梁神模式等继续作为可选插件，避免默认扩大攻击面和安装包体积。
-
-**Linux 版 v0.8.0 在哪里？**  
-本版本按范围决定不做 Linux 正式发布链；当前公开安装包仍为 Windows x64。
-
-第三方来源和许可证记录见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
-
-## License
-
-DSH Desktop 自身代码使用 [MIT](./LICENSE)。随安装包分发的第三方组件保留各自许可证和归属，详见 [`THIRD_PARTY_NOTICES.md`](./THIRD_PARTY_NOTICES.md)。
+- 当前交接：`HANDOFF.md`
+- 当前工程日志：`DEVELOPMENT_LOG.md`
+- v0.4–v0.8 历史工程日志：`docs/history/DEVELOPMENT_LOG-v0.4-v0.8.md`
+- 用户可读版本变化：`CHANGELOG.md`

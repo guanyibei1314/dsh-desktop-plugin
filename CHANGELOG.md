@@ -1,86 +1,63 @@
 # Changelog
 
+## 0.9.1 — 2026-08-21
+
+- Windows 安装包改为 **per-machine**，完整官方 Node.js 与 Git for Windows 在缺失时自动安装到系统环境。
+- 内嵌官方完整 **Node.js 24.19.0 LTS x64 MSI**，不是 portable；npm 随官方 MSI 安装。
+- 内嵌官方完整 **Git for Windows 2.55.0(5) x64 installer**，不是 MinGit/PortableGit；完整 Git Bash、Git GUI、Git LFS 已进入安装 E2E。
+- Node/Git 使用官方安装器持久化到 **Machine PATH**；安装完成后 DSH Setup 重新读取 HKLM/HKCU PATH、刷新当前进程并广播 Windows Environment 变更，避免首次启动仍拿旧 PATH。
+- 普通安装检测现有 `node` / `git`；已有可用安装默认保留，不无条件覆盖用户开发环境。
+- DSH Desktop 卸载不删除独立 Node/Git；CI 已验证卸载 DSH 后 Node、Git、Git Bash 仍正常存在。
+- 新增 toolchain manifest/source/hash 检查和 live latest 门禁：Node pinned 必须等于官方 latest LTS，Git pinned 必须等于 Git for Windows latest tag。
+- Node/Git 安装器在嵌入前校验 SHA-256、Authenticode 和预期签名者；任一异常 fail-closed。
+- 用户安装阶段不再联网下载 Node/Git；经过校验的完整官方安装器已随 NSIS payload 交付，可离线安装。
+- DeepSeek Harness 官方 stable 在开发期间升级，bundled 以及直接 `@deepseek-ai/dsh-*` 家族统一从 `0.1.0-rc.7` 对齐至 **`0.1.1-rc.1`**。
+- `package-lock.json` 受控重建并同步项目版本 `0.9.1`；重建使用 `--package-lock-only --ignore-scripts`。
+- 修复首版 NSIS PATH refresh 误用不存在的 `ReadRegExpandStr`；最终使用 `SetRegView 64 + ReadRegStr + ExpandEnvStrings`。
+- Windows build #73 全绿：Node/Git official latest、SHA/signature、Runtime/插件红蓝、junction/GC、NSIS、packaged smoke、完整 Node/npm/Git/Bash/GUI/LFS/Machine PATH、installed Runtime、live market/security、三轮 clean-install/restart/uninstall、体积审计、EXE SHA-256 和 artifact upload 全部通过。
+- PR #73 候选安装包：`221,685,265 bytes = 211.42 MiB`；v0.9.x 继续保留 **230 MiB** 硬体积上限。
+- PR #12 合并：`7332654a3d25e36791043c6e07970e80f75bb364`；正式 release trigger：`6d8f781c25bd425097f6207c6ce3e35e39019a22`。
+- 正式 `v0.9.1` tag 已生成并验证与 release trigger commit 完全一致。
+- 正式 EXE SHA-256 仍以 GitHub Release Notes 和 `DSH-Desktop-Setup-0.9.1.exe.sha256` asset 为权威，不使用 Actions artifact ZIP digest 冒充。
+
+## 0.9.0 — 2026-08-21
+
+- 首次引入完整 Node.js + 完整 Git for Windows 随 DSH Desktop 安装的方向。
+- 该版本随后被 v0.9.1 取代：v0.9.1 更新 Git for Windows 到 2.55.0(5)，把 Windows 安装/Machine PATH 约束和完整 Git Bash/GUI/LFS E2E 做成硬门禁，并同步官方最新 DeepSeek Harness Runtime。
+- 新用户应使用 v0.9.1，不建议继续以 v0.9.0 作为发布基线。
+
 ## 0.8.0 — 2026-08-18
 
-- 新增独立 **DSH Runtime 更新 GUI**，可查看 current / bundled / latest / previous / pending / blocked 状态、最近检查与最近激活时间。
-- 新增 Stable / Latest 更新通道选择、自动更新开关、手动检查更新、手动回滚、重启应用与打开 Runtime 目录。
-- Runtime 设置窗口继续采用本地 sandbox + 最小 IPC；DSH Web 不获得 Runtime 管理权限。
-- 自动更新从“启动后单次调度”改为应用运行期间持续调度；真正联网检查仍由原有 24 小时 `shouldCheck` 门禁控制。
-- 新增 junction-aware smoke Profile 清理：遇到 Windows junction / 符号链接时只解除链接，不递归穿透外部目标。
-- 新增 managed Runtime 自动 GC，仅保留 `active` / `previous` / `pending`，避免旧 Runtime 长期累积。
-- 新增 `test:runtime-maintenance`，在 Windows CI 中构造真实 junction + 外部 sentinel，验证清理不会越界，并验证受保护 Runtime 不会被 GC。
-- Windows Release 现在为最终安装包生成 `.sha256` 文件，publish 阶段会再次校验并把最终 EXE SHA-256 写入 Release Notes。
-- PR #8 的最终 Windows build #58 已通过：Runtime/插件红蓝测试、maintenance junction/GC、安全更新链、NSIS、packaged smoke、安装后 Runtime 更新、live market/security、三轮 clean-install/restart/uninstall、体积审计与候选 SHA-256 生成。
-- 正式 `v0.8.0` tag 已生成并核对与 `release: v0.8.0` 提交完全一致；正式 EXE hash 以 Release Notes / `.exe.sha256` asset 为权威来源。
-- 本版本不扩展 Linux 发布链；跨平台正式发布仍留给后续版本。
+- 新增独立 **DSH Runtime 更新 GUI**，可查看 current / bundled / latest / previous / pending / blocked、最近检查和激活状态。
+- 新增 Stable / Latest、自动更新、手动检查、手动回滚、重启和 Runtime 目录入口。
+- Runtime 设置窗口保持 sandbox + contextIsolation + 最小 IPC，DSH Web 不获得 Runtime 管理权限。
+- 自动更新从启动后单次调度改成应用持续运行时重新触发门禁；实际网络检查仍由 24h `shouldCheck` 控制。
+- 新增 junction-aware smoke Profile 清理，junction/symlink 只解除链接，不递归穿透外部目标。
+- 新增 managed Runtime GC，仅保留 active / previous / pending。
+- Windows Release 新增最终 EXE `.sha256`，publish 使用同一个已验证 artifact 并再次执行 `sha256sum -c`。
+- PR #8 Windows build #58 通过 Runtime/插件红蓝、junction/GC、NSIS、installed Runtime、live market、安全门禁和三轮安装回归。
 
 ## 0.7.1 — 2026-08-18
 
-- 新增正式 DSH Desktop 蓝青科技风桌面图标。
-- 图标统一用于 Windows 应用/安装包、主窗口、启动闪屏、发送消息窗口与内置终端窗口。
-- 托盘继续保留独立轻量小尺寸图标，避免复杂图案在 16–24 px 下失去辨识度。
-- 新增受控图标源 `assets/icon-source.b64` 与 `scripts/materialize-app-icon.js`。
-- 构建前强制校验 PNG signature、256×256 尺寸、字节长度和 SHA-256；任何不一致都会 fail-closed。
-- `start` / `smoke` / `check` / `dist` 均使用同一图标 materialize/校验链，防止开发环境与正式包资源漂移。
-- PR #7 Windows build #48 通过 Runtime/插件市场红蓝、正式 NSIS、packaged smoke、安装后 Runtime 更新、实时插件市场、3 轮 clean-install/restart/uninstall 和体积审计。
+- 新增正式 DSH Desktop 蓝青科技风桌面图标，并统一用于应用、安装包、窗口和 splash。
+- 构建前校验受控图标源、PNG signature、尺寸、长度和 SHA-256。
 
 ## 0.7.0 — 2026-08-18
 
-- bundled DeepSeek Harness 更新至官方 `@deepseek-ai/dsh@0.1.0-rc.7`。
-- 新增 managed DSH Runtime 自动更新系统：默认 Stable 通道每天检查官方 npm `latest`。
-- Runtime 更新不覆盖安装目录/app.asar；安装到用户私有 runtime store，当前会话不热切换。
-- 更新候选必须通过官方包名/版本/tarball 来源、sha512 integrity、OSV、lifecycle script 等检查；无法完成安全评估时 fail-closed。
-- 新 Runtime 先在隔离 DSH_HOME 启动真实 `dsh web`，通过后暂存；下次启动再使用真实用户 Profile 做兼容性 preflight，通过才激活。
-- 激活失败保留 previous/bundled Runtime，不破坏当前 Profile。
-- 主 Harness、插件管理、bundled Skin Center reconciliation 统一走当前已验证 Runtime，避免 CLI/服务版本漂移。
-- 新增 Runtime updater 功能测试和红蓝安全测试。
-- 修复 Windows junction 清理可能穿透 link、破坏 managed Runtime 的问题。
-- 发布门禁继续保留正式安装后 Runtime 更新 E2E、live market/security 与三轮 clean-install/restart/uninstall。
+- bundled DeepSeek Harness 更新到当时官方 `0.1.0-rc.7`。
+- 新增 managed official DSH Runtime 自动更新、隔离 `dsh web` probe、真实 Profile preflight、pending/activate/rollback 链。
+- 新增 Runtime updater functional/red-blue tests 和 installed Runtime E2E。
 
 ## 0.6.0 — 2026-08-18
 
-- 新增实时 DSH 插件市场，连接社区目录 `https://awesome-dsh-plugin.com/plugins.json`。
-- 市场支持搜索、分类、排序、已安装过滤、npm 插件一键安装/升级/卸载。
-- 非 npm/Git/URL/shell 类型条目仅展示，不进入一键安装链。
-- 新增插件安装前安全预检：npm 元数据、维护者、发布时间、deprecated、lifecycle scripts、dependency count、integrity、OSV。
-- 新增风险评分：low / medium / high / critical；critical 阻断、high 二次确认、unknown/无法评估默认阻断。
-- Registry 使用固定 HTTPS URL、拒绝手动重定向、限制响应大小、屏蔽 prototype pollution 危险键。
-- renderer 不注入远程 HTML，IPC 验证调用者来源。
-- 新增插件市场功能测试、security tests 与 red-blue tests。
+- 新增实时插件市场、搜索/分类/排序和 npm 插件安装/更新/卸载。
+- 新增插件 metadata、lifecycle、integrity、OSV 和风险分级安全预检。
+- 新增插件市场 functional/security/red-blue tests。
 
-## 0.5.1 — 2026-08-17
+## 0.5.x — 2026-08-17/18
 
-- 修复内置 Skin Center 在 Web Profile 中的持久化/注册问题。
-- 内置 `@linxin666/dsh-skins@0.1.18`，从安装包物理目录直接注册到 Web Profile。
-- 保持本地 `link:` + pnpm offline，不在运行时下载皮肤 `@latest`。
-- 用户已有显式不同版本时不擅自替换。
-
-公开 Windows 安装包：
-
-```text
-DSH-Desktop-Setup-0.5.1.exe
-127,377,535 bytes
-SHA256 de40af4042c20cff8942e505521579d99a2aeb2d5969aa3a63f05e42f69e5d86
-```
-
-## 0.5.0 — 2026-08-17
-
-- 将 Skin Center 与精选皮肤资产纳入安装包，用户无需另外安装皮肤插件。
-- 新增 bundled Web UI/Profile reconciliation 与诊断日志。
-- 皮肤初始化失败不阻断 DSH Desktop 主程序启动。
-- 保留 SSH、Remote Web、任务执行、图像理解、梁神模式等高权限/大体积能力为可选插件，不默认扩大攻击面。
+- 内置 `@linxin666/dsh-skins@0.1.18` Skin Center，并以安装包本地 `link:` 离线注册到 Web Profile。
 
 ## 0.4.0 — 2026-08-16
 
-- 新增内置插件安装、升级、卸载环境：内置 pnpm 11.17.0，使用 DSH `web` Profile 对账语义，不依赖系统 Node.js / pnpm。
-- 新增安全隔离的内置浏览器：基于 Electron `BaseWindow + WebContentsView`，远程网页无 Node / Electron bridge，使用独立持久化会话。
-- 新增 Sites：将常用 Web 工具保存为独立桌面工作区，每个 Site 使用独立持久化浏览器分区。
-- 保留原有 DeepSeek Harness 主界面、会话、托盘、内置 xterm / node-pty 终端等功能。
-- 插件管理 IPC、浏览器工具栏 IPC、Sites IPC 分别隔离并校验发送者；插件输入限制为 npm Registry 包名与受限版本格式。
-- Windows x64 包裁除不参与当前运行时的 pnpm artifacts、ARM64 PTY 预编译与 node-pty 构建素材。
-- 新增 packaged runtime closure、x64 PTY closure、打包后 EXE smoke、打包后 pnpm / DSH plugin E2E、安装包体积审计。
-- GitHub Release 发布改为从 `package.json` 自动读取版本，不再覆盖旧版本标签。
-
-### PR 验证基线
-
-PR #2 最终 Windows 构建：`126,499,001 bytes = 120.64 MiB`。相对 v0.3.0 的 `125,949,889 bytes ≈ 120.12 MiB`，新增上述能力后仅增加约 `0.52 MiB`。
+- 建立内置 pnpm 插件环境、浏览器、Sites、IPC 权限隔离、packaged Runtime closure、node-pty/xterm 和安装包体积审计基线。
