@@ -6,6 +6,7 @@ const fs = require('fs')
 const net = require('net')
 const path = require('path')
 const {
+  EXPECTED_REPOSITORY,
   PACKAGE_NAME,
   REGISTRY_ORIGIN,
   REGISTRY_URL,
@@ -15,8 +16,10 @@ const {
   isSafeVersion,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRepository,
   shouldCheck,
 } = require('./runtime-update-core')
+const { readJsonLimited } = require('./secure-fetch')
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10000
@@ -176,7 +179,8 @@ function validateInstalledVersion(version) {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
     const bin = installedDshBin(version)
     if (pkg.name !== PACKAGE_NAME || pkg.version !== version || !fs.existsSync(bin)) return null
-    return { version, dir, bin }
+    if (normalizeRepository(pkg.repository) !== EXPECTED_REPOSITORY) return null
+    return { version, dir, bin, repository: EXPECTED_REPOSITORY }
   } catch (err) {
     return null
   }
@@ -373,14 +377,7 @@ async function fetchJson(url, options, maxBytes) {
     redirect: 'error',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   }))
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const contentType = response.headers.get('content-type') || ''
-  if (!/application\/(?:json|[^;]+\+json)/i.test(contentType)) throw new Error('unexpected response content type')
-  const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > maxBytes) throw new Error('response exceeds size limit')
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  if (bytes.byteLength > maxBytes) throw new Error('response exceeds size limit')
-  return JSON.parse(new TextDecoder().decode(bytes))
+  return readJsonLimited(response, maxBytes, { label: 'Runtime security response' })
 }
 
 async function fetchOfficialRelease(channel) {
@@ -398,6 +395,117 @@ async function queryOsv(version) {
     body: JSON.stringify({ package: { ecosystem: 'npm', name: PACKAGE_NAME }, version }),
   }, MAX_OSV_BYTES)
   return normalizeOsvResponse(body)
+}
+
+function systemNpmCliPath() {
+  const candidates = []
+  if (process.platform === 'win32') {
+    for (const root of [process.env.ProgramW6432, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]) {
+      if (root) candidates.push(path.join(root, 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js'))
+    }
+  }
+  if (process.env.CI === 'true' && process.env.npm_execpath) candidates.push(process.env.npm_execpath)
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null
+}
+
+function runNpmCli(npmCli, args, cwd, timeoutMs = 180000) {
+  return new Promise((resolve, reject) => {
+    const child = originalSpawn(process.execPath, [npmCli, ...args], {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: runtimeEnvironment(path.join(runtimeRoot(), 'provenance-home')),
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      terminateTree(child)
+      if (!settled) { settled = true; reject(new Error('npm provenance verification timed out')) }
+    }, timeoutMs)
+    child.stdout.on('data', (data) => { stdout += String(data); if (stdout.length > 4_000_000) stdout = stdout.slice(-4_000_000) })
+    child.stderr.on('data', (data) => { stderr += String(data); if (stderr.length > 500_000) stderr = stderr.slice(-500_000) })
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      if (!settled) { settled = true; reject(error) }
+    })
+    child.once('exit', (code) => {
+      clearTimeout(timer)
+      if (settled) return
+      settled = true
+      if (code === 0) resolve({ stdout, stderr })
+      else reject(new Error(`npm provenance verification failed (${code}): ${stderr.slice(-4000)} ${stdout.slice(-4000)}`))
+    })
+  })
+}
+
+function decodedProvenancePayloads(value, out = []) {
+  if (!value || typeof value !== 'object') return out
+  if (value.dsseEnvelope && typeof value.dsseEnvelope.payload === 'string') {
+    try {
+      const decoded = Buffer.from(value.dsseEnvelope.payload, 'base64').toString('utf8')
+      out.push(decodeURIComponent(decoded))
+    } catch (_) { /* invalid payload is simply not accepted */ }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) decodedProvenancePayloads(item, out)
+  } else {
+    for (const item of Object.values(value)) decodedProvenancePayloads(item, out)
+  }
+  return out
+}
+
+async function verifyRuntimeProvenance(release, installed) {
+  if (!release.attestations || !/provenance/i.test(release.attestations.predicateType || '')) {
+    throw new Error('official DSH release is missing npm provenance metadata')
+  }
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+  const npmCli = systemNpmCliPath()
+  if (!npmCli) throw new Error('trusted npm CLI is unavailable for provenance verification')
+
+  const verifyRoot = path.join(runtimeRoot(), 'provenance-verify', `${release.version}-${Date.now()}`)
+  fs.mkdirSync(verifyRoot, { recursive: true })
+  fs.writeFileSync(path.join(verifyRoot, 'package.json'), JSON.stringify({
+    name: 'dsh-runtime-provenance-verifier',
+    private: true,
+    version: '0.0.0',
+    dependencies: { [PACKAGE_NAME]: release.version },
+  }, null, 2), 'utf8')
+  try {
+    await runNpmCli(npmCli, [
+      'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact',
+      `--registry=${REGISTRY_ORIGIN}/`,
+    ], verifyRoot)
+
+    const lock = readJson(path.join(verifyRoot, 'package-lock.json'))
+    const lockEntry = lock && lock.packages && lock.packages[`node_modules/${PACKAGE_NAME}`]
+    if (!lockEntry || lockEntry.version !== release.version || lockEntry.integrity !== release.integrity) {
+      throw new Error('npm provenance verification workspace does not match expected DSH version/integrity')
+    }
+    const rootPkg = readJson(path.join(verifyRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
+    if (!rootPkg || normalizeRepository(rootPkg.repository) !== EXPECTED_REPOSITORY) {
+      throw new Error('npm provenance package repository does not match expected DeepSeek source')
+    }
+
+    const audited = await runNpmCli(npmCli, [
+      'audit', 'signatures', '--json', '--include-attestations', `--registry=${REGISTRY_ORIGIN}/`,
+    ], verifyRoot)
+    let report
+    try { report = JSON.parse(audited.stdout) } catch (_) { throw new Error('npm audit signatures returned invalid JSON') }
+    const verified = report && Array.isArray(report.verified) ? report.verified : []
+    const payloads = decodedProvenancePayloads(verified)
+    const rootProvenance = payloads.some((payload) =>
+      /provenance/i.test(payload) && payload.includes(PACKAGE_NAME) && payload.includes(release.version))
+    if (!rootProvenance) {
+      throw new Error('verified Sigstore provenance for exact @deepseek-ai/dsh release was not found')
+    }
+    appendLog(`verified npm/Sigstore provenance for ${release.version} source=${EXPECTED_REPOSITORY}`)
+    return true
+  } finally {
+    try { fs.rmSync(verifyRoot, { recursive: true, force: true }) } catch (_) { /* best effort */ }
+  }
 }
 
 async function installOfficialVersion(release, options = {}) {
@@ -443,6 +551,10 @@ async function installOfficialVersion(release, options = {}) {
     throw new Error('pnpm lock integrity does not match official registry metadata')
   }
 
+  // Authenticity must be independently verified before candidate JavaScript is
+  // ever executed by --version or dsh web. Integrity from the same npm metadata
+  // is not treated as an independent publisher identity.
+  await verifyRuntimeProvenance(release, installed)
   const smokeHome = path.join(runtimeRoot(), 'smoke-home', `${release.version}-${Date.now()}`)
   await probeDshBin(installed.bin, smokeHome)
   // Do not recursively remove DSH_HOME here. DSH profiles may contain Windows
@@ -651,4 +763,5 @@ module.exports = {
   scheduleAutoUpdate,
   stateFile,
   validateInstalledVersion,
+  verifyRuntimeProvenance,
 }

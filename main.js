@@ -21,19 +21,21 @@ const fs = require('fs')
 const path = require('path')
 const net = require('net')
 const { spawn } = require('child_process')
+const { pathToFileURL } = require('url')
+const { readJsonLimited } = require('./secure-fetch')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
   return hit ? hit.slice(6) : null
 })()
-const HARNESS_URL = (process.env.DSH_URL || ARG_URL || 'http://127.0.0.1:3080').replace(/\/+$/, '')
+const EXPLICIT_HARNESS_URL = (process.env.DSH_URL || ARG_URL || '').replace(/\/+$/, '')
 const SMOKE = process.argv.includes('--smoke')
 
 // ---------------------------------------------------------------- bundled DeepSeek Harness runtime
-// 零配置的核心：优先连接本机已有服务（兼容现状）；没有则用 Electron 自带的
-// Node 运行时启动打包内置的 DSH CLI（无需用户安装 Node / 执行命令）。
-let dshProc = null       // 内置 DSH 子进程
-let activeUrl = HARNESS_URL // 实际连接的 Harness URL（内置启动后可能变化）
+// 默认模式只信任 Desktop 自己启动并持有进程句柄的随机 loopback Runtime。
+// 复用外部服务必须由用户显式提供 DSH_URL / --url；固定 3080 不再自动信任。
+let dshProc = null
+let activeUrl = EXPLICIT_HARNESS_URL
 
 const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
@@ -58,6 +60,8 @@ let menuRebuildTimer = null
 let powerBlockerId = null
 const lastNotifyAt = new Map() // sessionId -> timestamp (debounce)
 const sessionCache = new Map() // sessionId -> { cwd, running, blank, updatedAt }
+const MAX_RPC_BYTES = 4 * 1024 * 1024
+const MAX_SSE_BUFFER_BYTES = 1024 * 1024
 
 // ---------------------------------------------------------------- local settings (zero-config: all optional, defaults work out of the box)
 function settingsFile() {
@@ -173,7 +177,7 @@ function delay(ms) {
 
 /** 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。 */
 async function startBundledDsh() {
-  if (dshProc !== null && activeUrl !== HARNESS_URL) return activeUrl
+  if (dshProc !== null && activeUrl) return activeUrl
   if (!hasBundledDsh()) throw new Error('内置 DeepSeek Harness 缺失（node_modules/@deepseek-ai/dsh）')
   const port = await pickPort()
   const home = dshHomeDir()
@@ -197,16 +201,19 @@ async function startBundledDsh() {
   child.on('error', (err) => { captured.push('spawn error: ' + err.message) })
   child.stdout.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
   child.stderr.on('data', (d) => { captured.push(String(d)); if (captured.length > 40) captured.shift() })
-  child.on('exit', () => { if (dshProc === child) { dshProc = null; activeUrl = HARNESS_URL } })
+  child.on('exit', () => { if (dshProc === child) { dshProc = null; activeUrl = EXPLICIT_HARNESS_URL } })
 
   const url = 'http://127.0.0.1:' + port
   const deadline = Date.now() + 90000
   while (Date.now() < deadline) {
+    // Never accept a responder after the child we launched has exited. This
+    // closes the port-race path where a different local process answers first.
+    if (dshProc !== child || child.exitCode !== null) break
     if (await probeUrl(url, 1000)) {
+      if (dshProc !== child || child.exitCode !== null) break
       activeUrl = url
       return url
     }
-    if (dshProc === null) break // 子进程提前退出
     await delay(1000)
   }
   stopBundledDsh()
@@ -229,18 +236,13 @@ function stopBundledDsh() {
 
 /**
  * 决定实际连接的 Harness URL：
- * 1. 用户显式指定 --url / DSH_URL：只连它，失败就报错页（尊重用户意图）。
- * 2. 默认：先探测 3080（本机已有服务则直接复用）；
- * 3. 没有则启动打包内置的 DSH 并等待就绪。
+ * 1. 只有用户显式指定 --url / DSH_URL 时才复用外部服务；
+ * 2. 默认始终启动 Desktop 自己持有句柄的 bundled DSH 随机端口。
  * @returns 就绪的 URL；null 表示不可用（走错误页）。
  */
 async function ensureHarness() {
-  if (process.env.DSH_URL || ARG_URL) {
-    return (await probeUrl(HARNESS_URL)) ? HARNESS_URL : null
-  }
-  if (await probeUrl(HARNESS_URL)) {
-    activeUrl = HARNESS_URL
-    return HARNESS_URL
+  if (EXPLICIT_HARNESS_URL) {
+    return (await probeUrl(EXPLICIT_HARNESS_URL)) ? EXPLICIT_HARNESS_URL : null
   }
   // 冒烟测试保持快速失败，不启动内置 DSH（冷启动很慢）。
   if (SMOKE) return null
@@ -266,8 +268,7 @@ async function rpc(method, payload = {}) {
     }),
     signal: AbortSignal.timeout(8000),
   })
-  if (!res.ok) throw new Error('HTTP ' + res.status)
-  const body = await res.json()
+  const body = await readJsonLimited(res, MAX_RPC_BYTES, { label: 'DSH RPC response' })
   const result = body && body.result
   if (!result || result.ok !== true) {
     const err = result && result.error
@@ -375,6 +376,9 @@ function connectEvents() {
         const { done, value } = await reader.read()
         if (done) break
         buf += decoder.decode(value, { stream: true })
+        if (Buffer.byteLength(buf, 'utf8') > MAX_SSE_BUFFER_BYTES) {
+          throw new Error('DSH SSE buffer exceeds size limit')
+        }
         let i
         while ((i = buf.indexOf('\n\n')) !== -1) {
           const block = buf.slice(0, i)
@@ -629,7 +633,7 @@ function rebuildMenu() {
 // ---------------------------------------------------------------- window
 async function loadMain() {
   if (!win) return
-  let url = HARNESS_URL
+  let url = activeUrl || EXPLICIT_HARNESS_URL
   try {
     url = await ensureHarness()
   } catch (err) {
@@ -693,6 +697,19 @@ function showWindow() {
   }
 }
 
+function sameOrigin(candidate, trusted) {
+  try {
+    return !!trusted && new URL(candidate).origin === new URL(trusted).origin
+  } catch (_) {
+    return false
+  }
+}
+
+function isTrustedMainNavigation(url) {
+  if (url === pathToFileURL(ERROR_HTML).href) return true
+  return sameOrigin(url, activeUrl)
+}
+
 function createWindow() {
   const bounds = rememberedBounds()
   const winOptions = {
@@ -704,6 +721,7 @@ function createWindow() {
     show: false,
     webPreferences: {
       preload: PRELOAD,
+      partition: 'persist:dsh-main',
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -715,6 +733,14 @@ function createWindow() {
     Object.assign(winOptions, { width: 1320, height: 860 })
   }
   win = new BrowserWindow(winOptions)
+  const mainSession = win.webContents.session
+  mainSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
+  mainSession.setPermissionCheckHandler(() => false)
+  const enforceMainOrigin = (event, url) => {
+    if (!isTrustedMainNavigation(url)) event.preventDefault()
+  }
+  win.webContents.on('will-navigate', enforceMainOrigin)
+  win.webContents.on('will-redirect', enforceMainOrigin)
   win.once('ready-to-show', () => {
     dismissSplash()
     if (!SMOKE) win.show()
@@ -762,8 +788,10 @@ function rememberBounds() {
 
 // ---------------------------------------------------------------- send-message dialog
 function isTrustedSender(event) {
-  const url = (event.senderFrame && event.senderFrame.url) || event.sender.getURL()
-  return url.startsWith('file://') || url.startsWith(activeUrl) || url.startsWith(HARNESS_URL)
+  const sender = event && event.sender
+  if (!sender) return false
+  return [win, sendDialog, termWin].some((candidate) =>
+    candidate && !candidate.isDestroyed() && sender === candidate.webContents)
 }
 
 function openSendDialog() {
@@ -951,8 +979,8 @@ ipcMain.on('desktop:closeSendDialog', (event) => {
   if (sendDialog !== null && !sendDialog.isDestroyed()) sendDialog.close()
 })
 
-ipcMain.on('desktop:retry', () => loadMain())
-ipcMain.on('desktop:quit', () => { quitting = true; app.quit() })
+ipcMain.on('desktop:retry', (event) => { if (isTrustedSender(event)) loadMain() })
+ipcMain.on('desktop:quit', (event) => { if (isTrustedSender(event)) { quitting = true; app.quit() } })
 
 // ---------------------------------------------------------------- lifecycle
 const gotLock = app.requestSingleInstanceLock()
