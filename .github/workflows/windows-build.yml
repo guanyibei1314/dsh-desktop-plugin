@@ -222,7 +222,7 @@ jobs:
   publish:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
       pull-requests: read
@@ -231,15 +231,14 @@ jobs:
       - name: Verify release commit is associated with a merged PR
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          PR_NUMBER="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].number // empty')"
-          if [[ -z "$PR_NUMBER" ]]; then
-            echo 'Release blocked: release commit is not associated with a merged PR into main.' >&2
-            exit 1
-          fi
-          echo "RELEASE_PR_NUMBER=$PR_NUMBER"
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls"
+          if ($LASTEXITCODE -ne 0) { throw 'failed to query release commit PR association' }
+          $prs = $json | ConvertFrom-Json
+          $merged = @($prs | Where-Object { $_.merged_at -and $_.base.ref -eq 'main' })
+          if ($merged.Count -lt 1) { throw 'Release blocked: release commit is not associated with a merged PR into main.' }
+          Write-Host "RELEASE_PR_NUMBER=$($merged[0].number)"
 
       - name: Checkout release metadata
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -252,40 +251,42 @@ jobs:
           name: dsh-desktop-windows
           path: dist
 
-      - name: Re-verify downloaded Authenticode and checksum
+      - name: Re-verify downloaded Authenticode and SHA-256
         env:
           DSH_WINDOWS_SIGNING_SUBJECT: ${{ secrets.DSH_WINDOWS_SIGNING_SUBJECT }}
         shell: pwsh
         run: |
           $env:DSH_REQUIRE_SIGNED_INSTALLER = '1'
           $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'downloaded release installer missing' }
           & pwsh -NoProfile -File scripts/verify-installer-signature.ps1 -InstallerPath $installer
           if ($LASTEXITCODE -ne 0) { throw "downloaded release Authenticode check failed with exit code $LASTEXITCODE" }
           $checksum = Get-Item "dist/DSH-Desktop-Setup-*.exe.sha256" | Select-Object -First 1
           if (-not $checksum) { throw 'release checksum file missing' }
-          Push-Location dist
-          try { sha256sum -c $checksum.Name } finally { Pop-Location }
-          if ($LASTEXITCODE -ne 0) { throw 'downloaded release SHA-256 check failed' }
+          $expected = ((Get-Content -LiteralPath $checksum.FullName -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw 'release checksum file is malformed' }
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "downloaded release SHA-256 mismatch: expected=$expected actual=$actual" }
+          Write-Host "[release] downloaded artifact SHA-256 verified: $actual"
 
       - name: Create or update versioned Release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
-          TAG="v${VERSION}"
-          EXE="dist/DSH-Desktop-Setup-${VERSION}.exe"
-          CHECKSUM="${EXE}.sha256"
-          test -f "$EXE"
-          test -f "$CHECKSUM"
-          test -f "${EXE}.blockmap"
-          test -f dist/latest.yml
-          (cd dist && sha256sum -c "$(basename "$CHECKSUM")")
-          SHA256="$(awk '{print $1}' "$CHECKSUM")"
-
-          NOTES=$(cat <<EOF
-          ## DSH Desktop ${VERSION}
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$pkg.version
+          $tag = "v$version"
+          $exe = "dist/DSH-Desktop-Setup-$version.exe"
+          $checksum = "$exe.sha256"
+          $blockmap = "$exe.blockmap"
+          $latest = 'dist/latest.yml'
+          foreach ($file in @($exe, $checksum, $blockmap, $latest)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "release asset missing: $file" }
+          }
+          $sha256 = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $notes = @"
+          ## DSH Desktop $version
 
           Security hardening release for DeepSeek Harness Desktop.
 
@@ -297,16 +298,19 @@ jobs:
           - npm/OSV/Runtime metadata readers enforce streaming byte limits before unbounded allocation.
           - Runtime updates require expected DeepSeek repository identity plus verified npm/Sigstore provenance before candidate JavaScript is executed.
           - GitHub Actions are pinned to immutable 40-character SHAs; release publication requires a merged PR association.
-          - Public release artifacts are fail-closed on trusted Authenticode for both the built app and installer; publisher subject is pinned by release secret.
+          - Public release artifacts are fail-closed on trusted Authenticode; publisher subject is pinned by repository secret.
 
           ### Windows installer SHA-256
-          \`${SHA256}\`
-          EOF
-          )
+          `$sha256`
+          "@
 
-          if gh release view "$TAG" --repo guanyibei1314/dsh-desktop-plugin >/dev/null 2>&1; then
-            gh release upload "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
-            gh release edit "$TAG" --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
-          else
-            gh release create "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
-          fi
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe $checksum $blockmap $latest --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to upload release assets' }
+            gh release edit $tag --title "DSH Desktop $version" --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to edit release metadata' }
+          } else {
+            gh release create $tag $exe $checksum $blockmap $latest --title "DSH Desktop $version" --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to create release' }
+          }
