@@ -9,6 +9,10 @@ const {
   normalizeRegistryRelease,
   selectRegistryTag,
 } = require('../runtime-update-core')
+const {
+  normalizeOfficialGitHubRelease,
+  normalizeOfficialSourcePackage,
+} = require('../runtime-publisher-auth')
 
 function good() {
   return {
@@ -30,6 +34,25 @@ function good() {
       },
     },
   }
+}
+
+function ghRelease() {
+  return {
+    tag_name: 'dsh-v0.1.0-rc.7',
+    draft: false,
+    immutable: true,
+    published_at: '2026-08-21T12:35:00Z',
+    html_url: 'https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.0-rc.7',
+  }
+}
+
+function ghSource(pkg = {}) {
+  const body = Object.assign({
+    name: PACKAGE_NAME,
+    version: '0.1.0-rc.7',
+    repository: { url: 'git+https://github.com/deepseek-ai/deepseek-harness.git' },
+  }, pkg)
+  return { type: 'file', encoding: 'base64', content: Buffer.from(JSON.stringify(body)).toString('base64') }
 }
 
 function expectReject(mutator, message) {
@@ -63,6 +86,22 @@ const wrongPredicate = good()
 wrongPredicate.versions['0.1.0-rc.7'].dist.attestations.provenance.predicateType = 'https://example.invalid/not-provenance'
 assert.strictEqual(normalizeRegistryRelease(wrongPredicate).attestations, null)
 
+const badTag = ghRelease(); badTag.tag_name = 'dsh-v0.1.0-rc.8'
+assert.throws(() => normalizeOfficialGitHubRelease(badTag, '0.1.0-rc.7'), /tag mismatch/)
+const draft = ghRelease(); draft.draft = true
+assert.throws(() => normalizeOfficialGitHubRelease(draft, '0.1.0-rc.7'), /must not be a draft/)
+const mutable = ghRelease(); mutable.immutable = false
+assert.throws(() => normalizeOfficialGitHubRelease(mutable, '0.1.0-rc.7'), /not immutable/)
+const unpub = ghRelease(); unpub.published_at = null
+assert.throws(() => normalizeOfficialGitHubRelease(unpub, '0.1.0-rc.7'), /not published/)
+const evilReleaseUrl = ghRelease(); evilReleaseUrl.html_url = 'https://github.com.evil.example/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.1.0-rc.7'
+assert.throws(() => normalizeOfficialGitHubRelease(evilReleaseUrl, '0.1.0-rc.7'), /URL identity/)
+assert.throws(() => normalizeOfficialSourcePackage(ghSource({ name: '@attacker/dsh' }), '0.1.0-rc.7'), /identity\/version/)
+assert.throws(() => normalizeOfficialSourcePackage(ghSource({ version: '0.1.0-rc.8' }), '0.1.0-rc.7'), /identity\/version/)
+assert.throws(() => normalizeOfficialSourcePackage(ghSource({ repository: 'https://github.com/attacker/fake' }), '0.1.0-rc.7'), /repository identity/)
+assert.throws(() => normalizeOfficialSourcePackage({ type: 'file', encoding: 'base64', content: '***' }, '0.1.0-rc.7'), /malformed/)
+assert.throws(() => normalizeOfficialSourcePackage({ type: 'symlink', encoding: 'base64', content: 'e30=' }, '0.1.0-rc.7'), /base64 file/)
+
 const scripted = good()
 scripted.versions['0.1.0-rc.7'].scripts = { postinstall: 'powershell -enc AAAA' }
 assert.strictEqual(normalizeRegistryRelease(scripted).lifecycleScripts, true)
@@ -89,4 +128,4 @@ assert.strictEqual(isHttpsRegistryTarball('https://evil.example/@deepseek-ai/dsh
 assert.strictEqual(isDshBinArgument('C:\\tmp\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js && calc.exe'), false)
 assert.strictEqual(isDshBinArgument('C:\\tmp\\node_modules\\@deepseek-ai\\dsh\\lib\\bin.js'), true)
 
-console.log('[runtime-update-red-blue] publisher identity, provenance metadata and adversarial cases passed')
+console.log('[runtime-update-red-blue] npm provenance and immutable GitHub publisher fallback adversarial cases passed')
