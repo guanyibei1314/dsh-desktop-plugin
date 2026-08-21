@@ -9,11 +9,11 @@
       "sha256": "f0f66c2a80c08a30a5ab5179ee9ea9e45f9b46289436a8cc87ff833b852db351"
     },
     "git": {
-      "version": "2.55.0.3",
+      "version": "2.55.0.5",
       "kind": "exe",
-      "file": "Git-2.55.0.3-64-bit.exe",
-      "url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.3/Git-2.55.0.3-64-bit.exe",
-      "sha256": "af12577d0fdff74243a5988197aa49b957d5044edc17004f6ddf0768996f1dca"
+      "file": "Git-2.55.0.5-64-bit.exe",
+      "url": "https://github.com/git-for-windows/git/releases/download/v2.55.0.windows.5/Git-2.55.0.5-64-bit.exe",
+      "sha256": "d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6"
     }
   }
 }
