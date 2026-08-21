@@ -2,11 +2,12 @@
 !include "WinMessages.nsh"
 
 !define DSH_NODE_INSTALLER "node-v24.19.0-x64.msi"
-!define DSH_GIT_INSTALLER "Git-2.55.0.3-64-bit.exe"
+!define DSH_GIT_INSTALLER "Git-2.55.0.5-64-bit.exe"
 
 !macro customInstall
   ; The official full installers are embedded into the DSH NSIS payload at
-  ; build time after source, SHA-256 and Authenticode verification.
+  ; build time after source, SHA-256 and Authenticode verification. Nothing is
+  ; downloaded on the user's machine, so an offline installation still works.
   File /oname=$PLUGINSDIR\${DSH_NODE_INSTALLER} "${BUILD_RESOURCES_DIR}\toolchain\${DSH_NODE_INSTALLER}"
   File /oname=$PLUGINSDIR\${DSH_GIT_INSTALLER} "${BUILD_RESOURCES_DIR}\toolchain\${DSH_GIT_INSTALLER}"
 
@@ -26,14 +27,14 @@
   ${EndIf}
 
   ${If} "$8" == "1"
-    DetailPrint "Installing full Node.js LTS 24.19.0 and registering PATH..."
+    DetailPrint "Installing full Node.js LTS 24.19.0 and registering Windows PATH..."
     ; Use the official MSI default feature selection: Node runtime, npm/core
     ; components and PATH integration. Do not force ADDLOCAL=ALL because the
     ; optional native-module build-tools flow can pull in Python/Visual Studio.
     ExecWait '"$SYSDIR\msiexec.exe" /i "$PLUGINSDIR\${DSH_NODE_INSTALLER}" /passive /norestart' $0
     ${If} "$0" != "0"
       ${If} "$0" != "3010"
-        MessageBox MB_ICONSTOP|MB_OK "Node.js installation failed (exit code $0). DSH Desktop setup will stop so the machine is not left in a partially configured state."
+        MessageBox MB_ICONSTOP|MB_OK "Node.js installation failed (exit code $0). DSH Desktop setup has stopped. Resolve the Node.js installer error and run DSH Desktop Setup again."
         Abort
       ${EndIf}
     ${EndIf}
@@ -55,21 +56,34 @@
   ${EndIf}
 
   ${If} "$8" == "1"
-    DetailPrint "Installing full Git for Windows 2.55.0(3) and registering Git on PATH..."
+    DetailPrint "Installing full Git for Windows 2.55.0(5) and registering Windows PATH..."
     ; PathOption=Cmd is Git for Windows' safe full-install PATH mode: the full
-    ; Git package (Git Bash/GUI/LFS/etc.) is installed, while only Git's cmd
-    ; wrappers are placed on the Windows PATH instead of Unix tools such as
+    ; Git package (Git Bash/GUI/LFS/OpenSSH/GCM/etc.) is installed, while only
+    ; Git's cmd wrappers enter Windows PATH instead of Unix tools such as
     ; find/sort that could shadow Windows commands.
     ExecWait '"$PLUGINSDIR\${DSH_GIT_INSTALLER}" /SP- /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /NOCANCEL /o:PathOption=Cmd' $0
     ${If} "$0" != "0"
-      MessageBox MB_ICONSTOP|MB_OK "Git for Windows installation failed (exit code $0). DSH Desktop setup will stop so the machine is not left in a partially configured state."
+      MessageBox MB_ICONSTOP|MB_OK "Git for Windows installation failed (exit code $0). DSH Desktop setup has stopped. Resolve the Git installer error and run DSH Desktop Setup again."
       Abort
     ${EndIf}
   ${Else}
     DetailPrint "Existing Git found on PATH; keeping the user's existing installation."
   ${EndIf}
 
-  ; Tell already-running desktop processes that machine/user environment data
-  ; changed. New terminals will pick up Node/Git without manual PATH editing.
+  ; Refresh this installer process from the persisted Machine + User PATH so a
+  ; DSH Desktop process launched immediately from the final setup page inherits
+  ; the newly installed Node/Git paths. Explorer/other apps are notified too.
+  ReadRegExpandStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+  ReadRegExpandStr $1 HKCU "Environment" "Path"
+  ${If} "$1" == ""
+    StrCpy $2 "$0"
+  ${ElseIf} "$0" == ""
+    StrCpy $2 "$1"
+  ${Else}
+    StrCpy $2 "$0;$1"
+  ${EndIf}
+  ${If} "$2" != ""
+    System::Call 'Kernel32::SetEnvironmentVariable(t "PATH", t r2)i.r3'
+  ${EndIf}
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 !macroend
