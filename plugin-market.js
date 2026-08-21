@@ -2,6 +2,7 @@
 
 const fs = require('fs')
 const path = require('path')
+const { readJsonLimited } = require('./secure-fetch')
 
 const REGISTRY_URL = 'https://awesome-dsh-plugin.com/plugins.json'
 const MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -133,8 +134,6 @@ async function fetchRegistry(fetchImpl = globalThis.fetch) {
   try {
     const response = await fetchImpl(REGISTRY_URL, {
       method: 'GET',
-      // Never follow a catalog-controlled redirect. The endpoint is pinned so
-      // a compromised response cannot turn Desktop into an SSRF client.
       redirect: 'manual',
       signal: controller.signal,
       headers: {
@@ -142,15 +141,10 @@ async function fetchRegistry(fetchImpl = globalThis.fetch) {
         'user-agent': 'DSH-Desktop-Plugin-Market',
       },
     })
-    if (!response || !response.ok) {
-      throw new Error(`插件目录请求失败（HTTP ${response ? response.status : 'unknown'}）。`)
-    }
-    const body = await response.text()
-    if (Buffer.byteLength(body, 'utf8') > MAX_BODY_BYTES) throw new Error('插件目录响应过大。')
-    return normalizeRegistry(JSON.parse(body))
+    const payload = await readJsonLimited(response, MAX_BODY_BYTES, { label: '插件目录响应' })
+    return normalizeRegistry(payload)
   } catch (error) {
     if (error && error.name === 'AbortError') throw new Error('插件目录请求超时。')
-    if (error instanceof SyntaxError) throw new Error('插件目录返回了无效 JSON。')
     throw error
   } finally {
     clearTimeout(timer)
