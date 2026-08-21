@@ -76,31 +76,33 @@ $desktopExe = Join-Path $installDir 'DSH Desktop.exe'
 if (-not (Test-Path -LiteralPath $desktopExe)) { throw "DSH Desktop executable missing after install: $desktopExe" }
 
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js'
-Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.3' -Name 'Git for Windows'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git for Windows'
 
 $pathState = Get-PersistedPathSnapshot
 $nodeInMachine = Test-PathContains -PathValue $pathState.Machine -Expected $nodeDir
-$nodeInUser = Test-PathContains -PathValue $pathState.User -Expected $nodeDir
 $gitInMachine = Test-PathContains -PathValue $pathState.Machine -Expected $gitCmdDir
-$gitInUser = Test-PathContains -PathValue $pathState.User -Expected $gitCmdDir
-
-if (-not ($nodeInMachine -or $nodeInUser)) {
-  throw "Node.js install succeeded but persisted Windows PATH does not contain $nodeDir"
+if (-not $nodeInMachine) {
+  throw "Node.js install succeeded but Machine PATH does not contain $nodeDir"
 }
-if (-not ($gitInMachine -or $gitInUser)) {
-  throw "Git install succeeded but persisted Windows PATH does not contain $gitCmdDir"
+if (-not $gitInMachine) {
+  throw "Git install succeeded but Machine PATH does not contain $gitCmdDir"
 }
-Write-Host "[toolchain-e2e] PATH verified: node(machine=$nodeInMachine,user=$nodeInUser) git(machine=$gitInMachine,user=$gitInUser)"
+Write-Host '[toolchain-e2e] Machine PATH contains full Node.js and Git for Windows'
 
-# Verify a new shell built from persisted Machine/User PATH can resolve both commands.
+# Verify a fresh shell built only from persisted Machine/User PATH can resolve
+# both commands. This catches installers that wrote files but failed PATH setup.
 $oldPath = $env:Path
 try {
   $env:Path = $pathState.Combined
   $nodeResolved = (& $env:ComSpec /D /C 'where node' 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($nodeResolved)) { throw "new shell cannot resolve node from persisted PATH: $nodeResolved" }
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($nodeResolved)) { throw "fresh shell cannot resolve node from persisted PATH: $nodeResolved" }
   $gitResolved = (& $env:ComSpec /D /C 'where git' 2>&1 | Out-String).Trim()
-  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitResolved)) { throw "new shell cannot resolve git from persisted PATH: $gitResolved" }
-  Write-Host "[toolchain-e2e] new shell resolves node and git from persisted PATH"
+  if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitResolved)) { throw "fresh shell cannot resolve git from persisted PATH: $gitResolved" }
+  $nodeVersion = (& $env:ComSpec /D /C 'node --version' 2>&1 | Out-String).Trim()
+  if ($nodeVersion -ne 'v24.19.0') { throw "fresh shell resolved wrong node: $nodeVersion" }
+  $gitVersion = (& $env:ComSpec /D /C 'git --version' 2>&1 | Out-String).Trim()
+  if ($gitVersion -ne 'git version 2.55.0.windows.5') { throw "fresh shell resolved wrong git: $gitVersion" }
+  Write-Host '[toolchain-e2e] fresh shell resolves the expected Node.js and Git versions from persisted PATH'
 } finally {
   $env:Path = $oldPath
 }
@@ -110,16 +112,16 @@ if ($null -eq $uninstaller) { throw 'DSH uninstaller missing after install' }
 $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
 if ($uninstall.ExitCode -ne 0) { throw "DSH uninstall failed with exit code $($uninstall.ExitCode)" }
 
-# Node/Git are official independent products. DSH uninstall must never remove them
-# or strip the PATH entries owned by their installers.
+# Node/Git are official independent products. DSH uninstall must never remove
+# them or strip the PATH entries owned by their own installers.
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after DSH uninstall'
-Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.3' -Name 'Git after DSH uninstall'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git after DSH uninstall'
 $afterPath = Get-PersistedPathSnapshot
-if (-not ((Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir) -or (Test-PathContains -PathValue $afterPath.User -Expected $nodeDir))) {
-  throw 'DSH uninstall incorrectly removed the Node.js PATH entry'
+if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir)) {
+  throw 'DSH uninstall incorrectly removed the Node.js Machine PATH entry'
 }
-if (-not ((Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir) -or (Test-PathContains -PathValue $afterPath.User -Expected $gitCmdDir))) {
-  throw 'DSH uninstall incorrectly removed the Git PATH entry'
+if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir)) {
+  throw 'DSH uninstall incorrectly removed the Git Machine PATH entry'
 }
 
-Write-Host '[toolchain-e2e] full Node.js + full Git installation, persisted PATH and DSH-uninstall independence passed'
+Write-Host '[toolchain-e2e] full Node.js + full Git system installation, Machine PATH and DSH-uninstall independence passed'
