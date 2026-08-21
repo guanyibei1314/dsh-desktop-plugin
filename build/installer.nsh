@@ -73,8 +73,13 @@
   ; Refresh this installer process from the persisted Machine + User PATH so a
   ; DSH Desktop process launched immediately from the final setup page inherits
   ; the newly installed Node/Git paths. Explorer/other apps are notified too.
-  ReadRegExpandStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
-  ReadRegExpandStr $1 HKCU "Environment" "Path"
+  ; NSIS ReadRegStr can read REG_EXPAND_SZ; expand any %SystemRoot%-style
+  ; references explicitly before assigning the current process environment.
+  SetRegView 64
+  ReadRegStr $0 HKLM "SYSTEM\CurrentControlSet\Control\Session Manager\Environment" "Path"
+  ReadRegStr $1 HKCU "Environment" "Path"
+  ExpandEnvStrings $0 $0
+  ExpandEnvStrings $1 $1
   ${If} "$1" == ""
     StrCpy $2 "$0"
   ${ElseIf} "$0" == ""
