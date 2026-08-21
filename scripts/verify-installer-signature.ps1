@@ -40,7 +40,8 @@ function Test-SignedFile {
   }
 }
 
-$requireReleaseSignature = $env:DSH_REQUIRE_SIGNED_INSTALLER -eq '1'
+$requireValue = ([string]$env:DSH_REQUIRE_SIGNED_INSTALLER).Trim().ToLowerInvariant()
+$requireReleaseSignature = @('1', 'true', 'yes') -contains $requireValue
 $expectedSubject = [string]$env:DSH_WINDOWS_SIGNING_SUBJECT
 
 Test-SignedFile -Path (Resolve-Path -LiteralPath $InstallerPath).Path -Required $requireReleaseSignature -ExpectedSubject $expectedSubject
