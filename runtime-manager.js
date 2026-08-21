@@ -20,6 +20,12 @@ const {
   shouldCheck,
 } = require('./runtime-update-core')
 const { readJsonLimited } = require('./secure-fetch')
+const {
+  officialReleaseApiUrl,
+  officialSourcePackageApiUrl,
+  normalizeOfficialGitHubRelease,
+  normalizeOfficialSourcePackage,
+} = require('./runtime-publisher-auth')
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10000
@@ -421,7 +427,7 @@ function runNpmCli(npmCli, args, cwd, timeoutMs = 180000) {
     let settled = false
     const timer = setTimeout(() => {
       terminateTree(child)
-      if (!settled) { settled = true; reject(new Error('npm provenance verification timed out')) }
+      if (!settled) { settled = true; reject(new Error('npm publisher verification timed out')) }
     }, timeoutMs)
     child.stdout.on('data', (data) => { stdout += String(data); if (stdout.length > 4_000_000) stdout = stdout.slice(-4_000_000) })
     child.stderr.on('data', (data) => { stderr += String(data); if (stderr.length > 500_000) stderr = stderr.slice(-500_000) })
@@ -434,7 +440,7 @@ function runNpmCli(npmCli, args, cwd, timeoutMs = 180000) {
       if (settled) return
       settled = true
       if (code === 0) resolve({ stdout, stderr })
-      else reject(new Error(`npm provenance verification failed (${code}): ${stderr.slice(-4000)} ${stdout.slice(-4000)}`))
+      else reject(new Error(`npm publisher verification failed (${code}): ${stderr.slice(-4000)} ${stdout.slice(-4000)}`))
     })
   })
 }
@@ -455,20 +461,31 @@ function decodedProvenancePayloads(value, out = []) {
   return out
 }
 
-async function verifyRuntimeProvenance(release, installed) {
-  if (!release.attestations || !/provenance/i.test(release.attestations.predicateType || '')) {
-    throw new Error('official DSH release is missing npm provenance metadata')
+async function verifyOfficialGitHubRelease(release) {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    'x-github-api-version': '2022-11-28',
   }
+  const releaseBody = await fetchJson(officialReleaseApiUrl(release.version), { method: 'GET', headers }, 2 * 1024 * 1024)
+  const normalizedRelease = normalizeOfficialGitHubRelease(releaseBody, release.version)
+  const sourceBody = await fetchJson(officialSourcePackageApiUrl(release.version), { method: 'GET', headers }, 1024 * 1024)
+  normalizeOfficialSourcePackage(sourceBody, release.version)
+  appendLog(`verified immutable official GitHub release ${normalizedRelease.tag} source=${EXPECTED_REPOSITORY}`)
+  return normalizedRelease
+}
+
+async function verifyRuntimeProvenance(release, installed) {
   if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
     throw new Error('installed DSH repository identity does not match expected publisher source')
   }
   const npmCli = systemNpmCliPath()
-  if (!npmCli) throw new Error('trusted npm CLI is unavailable for provenance verification')
+  if (!npmCli) throw new Error('trusted npm CLI is unavailable for publisher verification')
 
-  const verifyRoot = path.join(runtimeRoot(), 'provenance-verify', `${release.version}-${Date.now()}`)
+  const verifyRoot = path.join(runtimeRoot(), 'publisher-verify', `${release.version}-${Date.now()}`)
   fs.mkdirSync(verifyRoot, { recursive: true })
   fs.writeFileSync(path.join(verifyRoot, 'package.json'), JSON.stringify({
-    name: 'dsh-runtime-provenance-verifier',
+    name: 'dsh-runtime-publisher-verifier',
     private: true,
     version: '0.0.0',
     dependencies: { [PACKAGE_NAME]: release.version },
@@ -482,26 +499,35 @@ async function verifyRuntimeProvenance(release, installed) {
     const lock = readJson(path.join(verifyRoot, 'package-lock.json'))
     const lockEntry = lock && lock.packages && lock.packages[`node_modules/${PACKAGE_NAME}`]
     if (!lockEntry || lockEntry.version !== release.version || lockEntry.integrity !== release.integrity) {
-      throw new Error('npm provenance verification workspace does not match expected DSH version/integrity')
+      throw new Error('publisher verification workspace does not match expected DSH version/integrity')
     }
     const rootPkg = readJson(path.join(verifyRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
     if (!rootPkg || normalizeRepository(rootPkg.repository) !== EXPECTED_REPOSITORY) {
-      throw new Error('npm provenance package repository does not match expected DeepSeek source')
+      throw new Error('publisher verification package repository does not match expected DeepSeek source')
     }
 
-    const audited = await runNpmCli(npmCli, [
-      'audit', 'signatures', '--json', '--include-attestations', `--registry=${REGISTRY_ORIGIN}/`,
-    ], verifyRoot)
+    const auditArgs = ['audit', 'signatures', '--json', `--registry=${REGISTRY_ORIGIN}/`]
+    if (release.attestations) auditArgs.splice(3, 0, '--include-attestations')
+    const audited = await runNpmCli(npmCli, auditArgs, verifyRoot)
     let report
     try { report = JSON.parse(audited.stdout) } catch (_) { throw new Error('npm audit signatures returned invalid JSON') }
-    const verified = report && Array.isArray(report.verified) ? report.verified : []
-    const payloads = decodedProvenancePayloads(verified)
-    const rootProvenance = payloads.some((payload) =>
-      /provenance/i.test(payload) && payload.includes(PACKAGE_NAME) && payload.includes(release.version))
-    if (!rootProvenance) {
-      throw new Error('verified Sigstore provenance for exact @deepseek-ai/dsh release was not found')
+    if (!report || typeof report !== 'object') throw new Error('npm audit signatures returned an invalid report')
+    if (Array.isArray(report.invalid) && report.invalid.length > 0) throw new Error('npm registry signature verification reported invalid signatures')
+    if (Array.isArray(report.missing) && report.missing.length > 0) throw new Error('npm registry signature verification reported missing signatures')
+
+    if (release.attestations) {
+      const verified = Array.isArray(report.verified) ? report.verified : []
+      const payloads = decodedProvenancePayloads(verified)
+      const rootProvenance = payloads.some((payload) =>
+        /provenance/i.test(payload) && payload.includes(PACKAGE_NAME) && payload.includes(release.version))
+      if (!rootProvenance) {
+        throw new Error('verified Sigstore provenance for exact @deepseek-ai/dsh release was not found')
+      }
+      appendLog(`verified npm registry signatures + Sigstore provenance for ${release.version} source=${EXPECTED_REPOSITORY}`)
+    } else {
+      await verifyOfficialGitHubRelease(release)
+      appendLog(`verified npm registry signatures + immutable GitHub source identity for ${release.version}`)
     }
-    appendLog(`verified npm/Sigstore provenance for ${release.version} source=${EXPECTED_REPOSITORY}`)
     return true
   } finally {
     try { fs.rmSync(verifyRoot, { recursive: true, force: true }) } catch (_) { /* best effort */ }
