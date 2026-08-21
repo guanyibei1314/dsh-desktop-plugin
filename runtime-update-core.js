@@ -88,6 +88,20 @@ function normalizeAttestations(dist) {
   return { url, predicateType }
 }
 
+function normalizeRegistrySignatures(dist) {
+  const raw = dist && Array.isArray(dist.signatures) ? dist.signatures : []
+  const signatures = []
+  for (const item of raw.slice(0, 20)) {
+    if (!item || typeof item !== 'object') continue
+    const keyid = typeof item.keyid === 'string' ? item.keyid.trim() : ''
+    const sig = typeof item.sig === 'string' ? item.sig.trim() : ''
+    if (!/^SHA256:[A-Za-z0-9+/_=-]{8,180}$/.test(keyid)) continue
+    if (sig.length < 40 || sig.length > 4096 || !/^[A-Za-z0-9+/]+={0,2}$/.test(sig)) continue
+    if (!signatures.some((entry) => entry.keyid === keyid && entry.sig === sig)) signatures.push({ keyid, sig })
+  }
+  return signatures
+}
+
 function hasLifecycleScripts(pkg) {
   const scripts = pkg && typeof pkg.scripts === 'object' && pkg.scripts ? pkg.scripts : {}
   return ['preinstall', 'install', 'postinstall'].some((name) => typeof scripts[name] === 'string' && scripts[name].trim().length > 0)
@@ -117,6 +131,8 @@ function normalizeRegistryRelease(metadata, channel = 'stable') {
   const repository = normalizeRepository(pkg.repository)
   if (repository !== EXPECTED_REPOSITORY) throw new Error('registry package repository identity mismatch')
   const attestations = normalizeAttestations(dist)
+  const signatures = normalizeRegistrySignatures(dist)
+  if (signatures.length === 0) throw new Error('registry package is missing a valid npm signature record')
   const publishedAt = metadata.time && typeof metadata.time[version] === 'string' ? metadata.time[version] : null
   return {
     packageName: PACKAGE_NAME,
@@ -125,6 +141,7 @@ function normalizeRegistryRelease(metadata, channel = 'stable') {
     tarball: dist.tarball,
     repository,
     attestations,
+    signatures,
     publishedAt,
     deprecated: typeof pkg.deprecated === 'string' && pkg.deprecated.trim() ? pkg.deprecated.trim().slice(0, 500) : null,
     lifecycleScripts: hasLifecycleScripts(pkg),
@@ -169,6 +186,7 @@ module.exports = {
   normalizeAttestations,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRegistrySignatures,
   normalizeRepository,
   parseVersion,
   selectRegistryTag,
