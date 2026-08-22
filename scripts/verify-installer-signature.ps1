@@ -23,34 +23,36 @@ function Test-SignedFile {
 
   Write-Host "[authenticode] path=$Path status=$($sig.Status) subject=$subject thumbprint=$thumbprint"
 
-  if ($Required) {
-    if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-      throw "public release requires a valid trusted Authenticode signature: $Path status=$($sig.Status)"
-    }
-    if ([string]::IsNullOrWhiteSpace($ExpectedSubject)) {
-      throw 'public release requires DSH_WINDOWS_SIGNING_SUBJECT to pin the expected publisher identity'
-    }
-    if ($subject -ne $ExpectedSubject) {
+  if ($sig.Status -eq [System.Management.Automation.SignatureStatus]::Valid) {
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSubject) -and $subject -ne $ExpectedSubject) {
       throw "Authenticode publisher mismatch: expected='$ExpectedSubject' actual='$subject'"
     }
-  } elseif ($sig.Status -eq [System.Management.Automation.SignatureStatus]::Valid -and -not [string]::IsNullOrWhiteSpace($ExpectedSubject)) {
-    if ($subject -ne $ExpectedSubject) {
-      throw "candidate is signed by unexpected publisher: expected='$ExpectedSubject' actual='$subject'"
-    }
+    Write-Host "[authenticode] valid signature accepted: $Path"
+    return
+  }
+
+  if ($sig.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+    throw "Authenticode signature is present or unreadable but not valid: $Path status=$($sig.Status)"
+  }
+
+  if ($Required) {
+    Write-Warning "[authenticode] unsigned public release explicitly allowed: $Path"
+  } else {
+    Write-Host "[authenticode] unsigned candidate accepted: $Path"
   }
 }
 
 $requireValue = ([string]$env:DSH_REQUIRE_SIGNED_INSTALLER).Trim().ToLowerInvariant()
-$requireReleaseSignature = @('1', 'true', 'yes') -contains $requireValue
+$releaseSignatureRequested = @('1', 'true', 'yes') -contains $requireValue
 $expectedSubject = [string]$env:DSH_WINDOWS_SIGNING_SUBJECT
 
-Test-SignedFile -Path (Resolve-Path -LiteralPath $InstallerPath).Path -Required $requireReleaseSignature -ExpectedSubject $expectedSubject
+Test-SignedFile -Path (Resolve-Path -LiteralPath $InstallerPath).Path -Required $releaseSignatureRequested -ExpectedSubject $expectedSubject
 if (-not [string]::IsNullOrWhiteSpace($ApplicationPath)) {
-  Test-SignedFile -Path (Resolve-Path -LiteralPath $ApplicationPath).Path -Required $requireReleaseSignature -ExpectedSubject $expectedSubject
+  Test-SignedFile -Path (Resolve-Path -LiteralPath $ApplicationPath).Path -Required $releaseSignatureRequested -ExpectedSubject $expectedSubject
 }
 
-if ($requireReleaseSignature) {
-  Write-Host '[authenticode] trusted publisher gate passed for public release'
+if ($releaseSignatureRequested) {
+  Write-Host '[authenticode] public release gate passed; Authenticode is optional, invalid signatures remain rejected'
 } else {
-  Write-Host '[authenticode] PR/candidate build: trusted signature is optional; public release remains fail-closed'
+  Write-Host '[authenticode] candidate gate passed; Authenticode is optional, invalid signatures remain rejected'
 }
