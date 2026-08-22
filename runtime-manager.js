@@ -553,18 +553,27 @@ async function installOfficialVersion(release, options = {}) {
   const pnpm = pnpmBinPath()
   if (!fs.existsSync(pnpm)) throw new Error('bundled pnpm is missing')
   appendLog(`install ${PACKAGE_NAME}@${release.version} from official npm registry`)
-  await runCaptured([
-    pnpm,
-    'add',
-    '--save-prod',
-    '--save-exact',
-    '--ignore-scripts',
-    `--registry=${REGISTRY_ORIGIN}/`,
-    `${PACKAGE_NAME}@${release.version}`,
-  ], {
-    cwd: root,
-    env: runtimeEnvironment(path.join(runtimeRoot(), 'install-home')),
-  }, 180000)
+  try {
+    await runCaptured([
+      pnpm,
+      'add',
+      '--save-prod',
+      '--save-exact',
+      '--ignore-scripts',
+      `--registry=${REGISTRY_ORIGIN}/`,
+      `${PACKAGE_NAME}@${release.version}`,
+    ], {
+      cwd: root,
+      env: runtimeEnvironment(path.join(runtimeRoot(), 'install-home')),
+    }, 180000)
+  } catch (err) {
+    const detail = String(err && err.message ? err.message : err)
+    const windowsElectronCleanupExit = process.platform === 'win32'
+      && /process failed \(2147483651\)/.test(detail)
+      && /Done in [0-9.]+s using pnpm v[0-9.]+/.test(detail)
+    if (!windowsElectronCleanupExit) throw err
+    appendLog('pnpm reported Windows/Electron 0x80000003 after Done; continuing only to strict package/lock/publisher validation')
+  }
 
   const installed = validateInstalledVersion(release.version)
   if (!installed) {
