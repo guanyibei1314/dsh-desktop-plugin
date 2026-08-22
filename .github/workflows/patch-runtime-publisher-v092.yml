@@ -1,0 +1,69 @@
+name: Patch v0.9.2 Runtime publisher verification once
+
+on:
+  push:
+    branches:
+      - fix/v0.9.2-security-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout controlled branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: fix/v0.9.2-security-hardening
+          persist-credentials: true
+
+      - name: Replace tree-wide npm audit with exact package signature verification
+        shell: python
+        run: |
+          from pathlib import Path
+          p = Path('runtime-manager.js')
+          s = p.read_text(encoding='utf-8')
+
+          old_import = """const {\n  officialReleaseApiUrl,\n  officialSourcePackageApiUrl,\n  normalizeOfficialGitHubRelease,\n  normalizeOfficialSourcePackage,\n} = require('./runtime-publisher-auth')\n"""
+          new_import = """const {\n  REGISTRY_KEYS_URL,\n  officialReleaseApiUrl,\n  officialSourcePackageApiUrl,\n  normalizeOfficialGitHubRelease,\n  normalizeOfficialSourcePackage,\n  verifyNpmRegistrySignature,\n} = require('./runtime-publisher-auth')\n"""
+          if s.count(old_import) != 1:
+              raise SystemExit(f'publisher import anchor mismatch: {s.count(old_import)}')
+          s = s.replace(old_import, new_import, 1)
+
+          start = s.index('async function verifyRuntimeProvenance(')
+          end = s.index('\nasync function installOfficialVersion(', start)
+          replacement = r'''async function verifyRuntimeProvenance(release, installed) {
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+
+  const keysBody = await fetchJson(REGISTRY_KEYS_URL, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    },
+  }, 512 * 1024)
+  const signature = verifyNpmRegistrySignature(release, keysBody)
+
+  const upstream = await verifyOfficialGitHubRelease(release)
+  appendLog(`verified exact npm Registry ECDSA key=${signature.keyid} + immutable GitHub release ${upstream.tag} source=${EXPECTED_REPOSITORY}${release.attestations ? ' provenance-metadata-present' : ''}`)
+  return true
+}
+'''
+          s = s[:start] + replacement + s[end:]
+          p.write_text(s, encoding='utf-8')
+
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/patch-runtime-publisher-v092.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add runtime-manager.js .github/workflows/patch-runtime-publisher-v092.yml
+          git diff --cached --check
+          git commit -m "security: verify exact DSH publisher identity"
+          git push origin HEAD:fix/v0.9.2-security-hardening
