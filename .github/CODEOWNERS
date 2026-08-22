@@ -1,0 +1,12 @@
+# Release/security-sensitive paths require owner review when branch rules enforce CODEOWNERS.
+* @guanyibei1314
+/.github/workflows/ @guanyibei1314
+/build/ @guanyibei1314
+/runtime-manager.js @guanyibei1314
+/runtime-update-core.js @guanyibei1314
+/plugin-security.js @guanyibei1314
+/plugin-market.js @guanyibei1314
+/plugin-market-ipc.js @guanyibei1314
+/desktop-extensions.js @guanyibei1314
+/package.json @guanyibei1314
+/package-lock.json @guanyibei1314

@@ -6,6 +6,7 @@ const fs = require('fs')
 const net = require('net')
 const path = require('path')
 const {
+  EXPECTED_REPOSITORY,
   PACKAGE_NAME,
   REGISTRY_ORIGIN,
   REGISTRY_URL,
@@ -15,8 +16,18 @@ const {
   isSafeVersion,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRepository,
   shouldCheck,
 } = require('./runtime-update-core')
+const { readJsonLimited } = require('./secure-fetch')
+const {
+  REGISTRY_KEYS_URL,
+  officialReleaseApiUrl,
+  officialSourcePackageApiUrl,
+  normalizeOfficialGitHubRelease,
+  normalizeOfficialSourcePackage,
+  verifyNpmRegistrySignature,
+} = require('./runtime-publisher-auth')
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
 const FETCH_TIMEOUT_MS = 10000
@@ -176,7 +187,8 @@ function validateInstalledVersion(version) {
     const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'))
     const bin = installedDshBin(version)
     if (pkg.name !== PACKAGE_NAME || pkg.version !== version || !fs.existsSync(bin)) return null
-    return { version, dir, bin }
+    if (normalizeRepository(pkg.repository) !== EXPECTED_REPOSITORY) return null
+    return { version, dir, bin, repository: EXPECTED_REPOSITORY }
   } catch (err) {
     return null
   }
@@ -373,14 +385,7 @@ async function fetchJson(url, options, maxBytes) {
     redirect: 'error',
     signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
   }))
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
-  const contentType = response.headers.get('content-type') || ''
-  if (!/application\/(?:json|[^;]+\+json)/i.test(contentType)) throw new Error('unexpected response content type')
-  const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > maxBytes) throw new Error('response exceeds size limit')
-  const bytes = new Uint8Array(await response.arrayBuffer())
-  if (bytes.byteLength > maxBytes) throw new Error('response exceeds size limit')
-  return JSON.parse(new TextDecoder().decode(bytes))
+  return readJsonLimited(response, maxBytes, { label: 'Runtime security response' })
 }
 
 async function fetchOfficialRelease(channel) {
@@ -398,6 +403,96 @@ async function queryOsv(version) {
     body: JSON.stringify({ package: { ecosystem: 'npm', name: PACKAGE_NAME }, version }),
   }, MAX_OSV_BYTES)
   return normalizeOsvResponse(body)
+}
+
+function systemNpmCliPath() {
+  const candidates = []
+  if (process.platform === 'win32') {
+    for (const root of [process.env.ProgramW6432, process.env.ProgramFiles, process.env['ProgramFiles(x86)']]) {
+      if (root) candidates.push(path.join(root, 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js'))
+    }
+  }
+  if (process.env.CI === 'true' && process.env.npm_execpath) candidates.push(process.env.npm_execpath)
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || null
+}
+
+function runNpmCli(npmCli, args, cwd, timeoutMs = 180000) {
+  return new Promise((resolve, reject) => {
+    const child = originalSpawn(process.execPath, [npmCli, ...args], {
+      cwd,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: runtimeEnvironment(path.join(runtimeRoot(), 'provenance-home')),
+    })
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+    const timer = setTimeout(() => {
+      terminateTree(child)
+      if (!settled) { settled = true; reject(new Error('npm publisher verification timed out')) }
+    }, timeoutMs)
+    child.stdout.on('data', (data) => { stdout += String(data); if (stdout.length > 4_000_000) stdout = stdout.slice(-4_000_000) })
+    child.stderr.on('data', (data) => { stderr += String(data); if (stderr.length > 500_000) stderr = stderr.slice(-500_000) })
+    child.once('error', (error) => {
+      clearTimeout(timer)
+      if (!settled) { settled = true; reject(error) }
+    })
+    child.once('exit', (code) => {
+      clearTimeout(timer)
+      if (settled) return
+      settled = true
+      if (code === 0) resolve({ stdout, stderr })
+      else reject(new Error(`npm publisher verification failed (${code}): ${stderr.slice(-4000)} ${stdout.slice(-4000)}`))
+    })
+  })
+}
+
+function decodedProvenancePayloads(value, out = []) {
+  if (!value || typeof value !== 'object') return out
+  if (value.dsseEnvelope && typeof value.dsseEnvelope.payload === 'string') {
+    try {
+      const decoded = Buffer.from(value.dsseEnvelope.payload, 'base64').toString('utf8')
+      out.push(decodeURIComponent(decoded))
+    } catch (_) { /* invalid payload is simply not accepted */ }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) decodedProvenancePayloads(item, out)
+  } else {
+    for (const item of Object.values(value)) decodedProvenancePayloads(item, out)
+  }
+  return out
+}
+
+async function verifyOfficialGitHubRelease(release) {
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    'x-github-api-version': '2022-11-28',
+  }
+  const releaseBody = await fetchJson(officialReleaseApiUrl(release.version), { method: 'GET', headers }, 2 * 1024 * 1024)
+  const normalizedRelease = normalizeOfficialGitHubRelease(releaseBody, release.version)
+  const sourceBody = await fetchJson(officialSourcePackageApiUrl(release.version), { method: 'GET', headers }, 1024 * 1024)
+  normalizeOfficialSourcePackage(sourceBody, release.version)
+  appendLog(`verified immutable official GitHub release ${normalizedRelease.tag} source=${EXPECTED_REPOSITORY}`)
+  return normalizedRelease
+}
+
+async function verifyRuntimeProvenance(release, installed) {
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+
+  const keysBody = await fetchJson(REGISTRY_KEYS_URL, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    },
+  }, 512 * 1024)
+  const signature = verifyNpmRegistrySignature(release, keysBody)
+  const upstream = await verifyOfficialGitHubRelease(release)
+  appendLog(`verified exact npm Registry ECDSA key=${signature.keyid} + immutable GitHub release ${upstream.tag} source=${EXPECTED_REPOSITORY}${release.attestations ? ' provenance-metadata-present' : ''}`)
+  return true
 }
 
 async function installOfficialVersion(release, options = {}) {
@@ -419,18 +514,27 @@ async function installOfficialVersion(release, options = {}) {
   const pnpm = pnpmBinPath()
   if (!fs.existsSync(pnpm)) throw new Error('bundled pnpm is missing')
   appendLog(`install ${PACKAGE_NAME}@${release.version} from official npm registry`)
-  await runCaptured([
-    pnpm,
-    'add',
-    '--save-prod',
-    '--save-exact',
-    '--ignore-scripts',
-    `--registry=${REGISTRY_ORIGIN}/`,
-    `${PACKAGE_NAME}@${release.version}`,
-  ], {
-    cwd: root,
-    env: runtimeEnvironment(path.join(runtimeRoot(), 'install-home')),
-  }, 180000)
+  try {
+    await runCaptured([
+      pnpm,
+      'add',
+      '--save-prod',
+      '--save-exact',
+      '--ignore-scripts',
+      `--registry=${REGISTRY_ORIGIN}/`,
+      `${PACKAGE_NAME}@${release.version}`,
+    ], {
+      cwd: root,
+      env: runtimeEnvironment(path.join(runtimeRoot(), 'install-home')),
+    }, 180000)
+  } catch (err) {
+    const detail = String(err && err.message ? err.message : err)
+    const windowsElectronCleanupExit = process.platform === 'win32'
+      && /process failed \(2147483651\)/.test(detail)
+      && /Done in [0-9.]+s using pnpm v[0-9.]+/.test(detail)
+    if (!windowsElectronCleanupExit) throw err
+    appendLog('pnpm reported Windows/Electron 0x80000003 after Done; continuing only to strict package/lock/publisher validation')
+  }
 
   const installed = validateInstalledVersion(release.version)
   if (!installed) {
@@ -443,6 +547,10 @@ async function installOfficialVersion(release, options = {}) {
     throw new Error('pnpm lock integrity does not match official registry metadata')
   }
 
+  // Authenticity must be independently verified before candidate JavaScript is
+  // ever executed by --version or dsh web. Integrity from the same npm metadata
+  // is not treated as an independent publisher identity.
+  await verifyRuntimeProvenance(release, installed)
   const smokeHome = path.join(runtimeRoot(), 'smoke-home', `${release.version}-${Date.now()}`)
   await probeDshBin(installed.bin, smokeHome)
   // Do not recursively remove DSH_HOME here. DSH profiles may contain Windows
@@ -651,4 +759,5 @@ module.exports = {
   scheduleAutoUpdate,
   stateFile,
   validateInstalledVersion,
+  verifyRuntimeProvenance,
 }

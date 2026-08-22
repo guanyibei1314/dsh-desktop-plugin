@@ -17,10 +17,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '24'
           cache: npm
@@ -37,6 +39,9 @@ jobs:
       - name: Static syntax checks
         run: npm run check
 
+      - name: Security hardening regression tests
+        run: npm run test:security-hardening
+
       - name: DSH runtime updater functional tests
         run: npm run test:runtime-update
 
@@ -49,7 +54,7 @@ jobs:
       - name: Verify bundled DSH equals official stable release
         run: npm run verify:official-dsh
 
-      - name: Fast source runtime download and activation probe
+      - name: Fast source runtime download provenance and activation probe
         shell: pwsh
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-probe'
@@ -70,7 +75,7 @@ jobs:
             Write-Host '[source-runtime-probe] ----- runtime-update.log -----'
             Get-Content (Join-Path $runtimeRoot 'runtime-update.log') | ForEach-Object { Write-Host $_ }
           }
-          if ($exit -ne 0) { throw "source runtime update probe failed with exit code $exit" }
+          if ($exit -ne 0) { throw "source runtime update/provenance probe failed with exit code $exit" }
 
       - name: Plugin market functional tests
         run: npm run test:market
@@ -87,7 +92,8 @@ jobs:
             'scripts/verify-installed-toolchain.ps1',
             'scripts/verify-installed-app.ps1',
             'scripts/verify-installed-market.ps1',
-            'scripts/verify-installed-runtime-update.ps1'
+            'scripts/verify-installed-runtime-update.ps1',
+            'scripts/verify-installer-signature.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -107,7 +113,25 @@ jobs:
         run: npm run prepare:toolchain
 
       - name: Build Windows installer
+        env:
+          CSC_LINK: ${{ secrets.DSH_WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.DSH_WINDOWS_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.DSH_WINDOWS_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.DSH_WINDOWS_CSC_KEY_PASSWORD }}
         run: npm run dist
+
+      - name: Verify Authenticode release policy
+        shell: pwsh
+        env:
+          DSH_REQUIRE_SIGNED_INSTALLER: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:') }}
+          DSH_WINDOWS_SIGNING_SUBJECT: ${{ secrets.DSH_WINDOWS_SIGNING_SUBJECT }}
+        run: |
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          $app = (Get-Item "dist/win-unpacked/DSH Desktop.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'built installer not found' }
+          if (-not $app) { throw 'built application not found' }
+          & pwsh -NoProfile -File scripts/verify-installer-signature.ps1 -InstallerPath $installer -ApplicationPath $app
+          if ($LASTEXITCODE -ne 0) { throw "Authenticode policy failed with exit code $LASTEXITCODE" }
 
       - name: Smoke test packaged application
         shell: pwsh
@@ -158,9 +182,6 @@ jobs:
 
       - name: Audit installer and unpacked runtime
         env:
-          # v0.9.x intentionally embeds official full Node.js and full Git for
-          # Windows installers. Preserve a hard size ceiling instead of dropping
-          # package-size control just because the product scope grew.
           DSH_MAX_INSTALLER_MIB: '230'
           DSH_BASELINE_INSTALLER_BYTES: '130173608'
           DSH_MAX_INSTALLER_GROWTH_MIB: '110'
@@ -187,7 +208,7 @@ jobs:
           Write-Host "INSTALLER_SHA256=$hash"
 
       - name: Upload installer artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dsh-desktop-windows
           path: |
@@ -199,64 +220,97 @@ jobs:
           retention-days: 7
 
   publish:
-    # Public release only after the full system toolchain install/PATH gate,
-    # official Runtime update chain, maintenance safety, red-blue gates, live
-    # market security and repeated installed-app E2E all pass.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions:
       contents: write
+      pull-requests: read
 
     steps:
+      - name: Verify release commit is associated with a merged PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          $json = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls"
+          if ($LASTEXITCODE -ne 0) { throw 'failed to query release commit PR association' }
+          $prs = $json | ConvertFrom-Json
+          $merged = @($prs | Where-Object { $_.merged_at -and $_.base.ref -eq 'main' })
+          if ($merged.Count -lt 1) { throw 'Release blocked: release commit is not associated with a merged PR into main.' }
+          Write-Host "RELEASE_PR_NUMBER=$($merged[0].number)"
+
       - name: Checkout release metadata
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
       - name: Download verified installer artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dsh-desktop-windows
           path: dist
 
+      - name: Re-verify downloaded Authenticode and SHA-256
+        env:
+          DSH_WINDOWS_SIGNING_SUBJECT: ${{ secrets.DSH_WINDOWS_SIGNING_SUBJECT }}
+        shell: pwsh
+        run: |
+          $env:DSH_REQUIRE_SIGNED_INSTALLER = '1'
+          $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName
+          if (-not $installer) { throw 'downloaded release installer missing' }
+          & pwsh -NoProfile -File scripts/verify-installer-signature.ps1 -InstallerPath $installer
+          if ($LASTEXITCODE -ne 0) { throw "downloaded release Authenticode check failed with exit code $LASTEXITCODE" }
+          $checksum = Get-Item "dist/DSH-Desktop-Setup-*.exe.sha256" | Select-Object -First 1
+          if (-not $checksum) { throw 'release checksum file missing' }
+          $expected = ((Get-Content -LiteralPath $checksum.FullName -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          if ($expected -notmatch '^[0-9a-f]{64}$') { throw 'release checksum file is malformed' }
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $installer).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "downloaded release SHA-256 mismatch: expected=$expected actual=$actual" }
+          Write-Host "[release] downloaded artifact SHA-256 verified: $actual"
+
       - name: Create or update versioned Release
         env:
           GH_TOKEN: ${{ github.token }}
-        shell: bash
+        shell: pwsh
         run: |
-          set -euo pipefail
-          VERSION="$(node -p "require('./package.json').version")"
-          TAG="v${VERSION}"
-          EXE="dist/DSH-Desktop-Setup-${VERSION}.exe"
-          CHECKSUM="${EXE}.sha256"
-          test -f "$EXE"
-          test -f "$CHECKSUM"
-          test -f "${EXE}.blockmap"
-          test -f dist/latest.yml
-          (cd dist && sha256sum -c "$(basename "$CHECKSUM")")
-          SHA256="$(awk '{print $1}' "$CHECKSUM")"
+          $pkg = Get-Content package.json -Raw | ConvertFrom-Json
+          $version = [string]$pkg.version
+          $tag = "v$version"
+          $exe = "dist/DSH-Desktop-Setup-$version.exe"
+          $checksum = "$exe.sha256"
+          $blockmap = "$exe.blockmap"
+          $latest = 'dist/latest.yml'
+          foreach ($file in @($exe, $checksum, $blockmap, $latest)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "release asset missing: $file" }
+          }
+          $sha256 = ((Get-Content -LiteralPath $checksum -Raw).Trim() -split '\s+')[0].ToLowerInvariant()
+          $notes = @"
+          ## DSH Desktop $version
 
-          NOTES=$(cat <<EOF
-          ## DSH Desktop ${VERSION}
+          Security hardening release for DeepSeek Harness Desktop.
 
-          零配置 DeepSeek Harness 桌面端。
+          ### v0.9.2 security baseline
+          - Elevated NSIS no longer discovers Node/Git through attacker-influenced PATH; machine-owned Program Files locations are used and red-team tested.
+          - Plugin OSV outage is fail-closed; one-click installs are bound to exact version, official npm Registry, tarball and SHA-512 integrity, with post-install verification/rollback.
+          - Default fixed 127.0.0.1:3080 reuse is removed; Desktop owns a random loopback Runtime unless the user explicitly opts into an external DSH URL.
+          - Main remote Session denies permissions by default and restricts top-level navigation/redirects to the trusted Harness origin.
+          - npm/OSV/Runtime metadata readers enforce streaming byte limits before unbounded allocation.
+          - Runtime updates require expected DeepSeek repository identity plus verified npm/Sigstore provenance before candidate JavaScript is executed.
+          - GitHub Actions are pinned to immutable 40-character SHAs; release publication requires a merged PR association.
+          - Public release artifacts are fail-closed on trusted Authenticode; publisher subject is pinned by repository secret.
 
-          ### 本版重点
-          - 安装包内嵌并安装官方完整 Node.js 24.19.0 LTS x64 MSI，不使用便携版；已有可用 Node 时默认保留用户现有安装。
-          - 安装包内嵌并安装官方完整 Git for Windows 2.55.0(5) x64 安装器，不使用 MinGit；已有可用 Git 时默认保留用户现有安装。
-          - 构建时实时核对 Node 最新 LTS 与 Git for Windows latest tag；固定官方来源、版本和 SHA-256，并校验 Authenticode，任一不符直接阻断发布。
-          - v0.9.1 Windows 安装采用 per-machine，一次 UAC 后由官方 Node/Git 安装器写入 Machine PATH；Git 使用安全的 Cmd PATH 模式，避免 Unix find/sort 等工具覆盖 Windows 同名命令。
-          - 安装器写入工具链后立即从注册表刷新自身 PATH，并广播 Environment 变更，避免安装完成后第一次启动 DSH/终端仍继承旧 PATH。
-          - 真实安装 E2E 强制验证 Node、npm、Git Bash、Git GUI、Git LFS、Machine PATH、新 shell 命令解析，并验证卸载 DSH 不会删除独立 Node/Git。
-          - v0.8.0 的 Runtime GUI、安全自动更新、junction-aware 清理、Runtime GC、插件市场与红蓝安全门禁全部保留。
+          ### Windows installer SHA-256
+          `$sha256`
+          "@
 
-          ### Windows 安装包 SHA-256
-          \`${SHA256}\`
-          EOF
-          )
-
-          if gh release view "$TAG" --repo guanyibei1314/dsh-desktop-plugin >/dev/null 2>&1; then
-            gh release upload "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --clobber --repo guanyibei1314/dsh-desktop-plugin
-            gh release edit "$TAG" --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
-          else
-            gh release create "$TAG" "$EXE" "$CHECKSUM" "${EXE}.blockmap" dist/latest.yml --title "DSH Desktop ${VERSION}" --notes "$NOTES" --repo guanyibei1314/dsh-desktop-plugin
-          fi
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $exe $checksum $blockmap $latest --clobber --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to upload release assets' }
+            gh release edit $tag --title "DSH Desktop $version" --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to edit release metadata' }
+          } else {
+            gh release create $tag $exe $checksum $blockmap $latest --title "DSH Desktop $version" --notes $notes --repo $env:GITHUB_REPOSITORY
+            if ($LASTEXITCODE -ne 0) { throw 'failed to create release' }
+          }

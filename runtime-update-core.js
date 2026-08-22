@@ -4,6 +4,11 @@ const PACKAGE_NAME = '@deepseek-ai/dsh'
 const REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const REGISTRY_URL = `${REGISTRY_ORIGIN}/@deepseek-ai%2Fdsh`
 const OSV_URL = 'https://api.osv.dev/v1/query'
+const EXPECTED_REPOSITORY = 'https://github.com/deepseek-ai/deepseek-harness'
+const SLSA_PROVENANCE_PREDICATES = new Set([
+  'https://slsa.dev/provenance/v0.2',
+  'https://slsa.dev/provenance/v1',
+])
 
 function isSafeVersion(value) {
   if (typeof value !== 'string' || value.length === 0 || value.length > 80) return false
@@ -51,10 +56,50 @@ function isHttpsRegistryTarball(value) {
   if (typeof value !== 'string' || value.length > 1000) return false
   try {
     const url = new URL(value)
-    return url.protocol === 'https:' && url.hostname === 'registry.npmjs.org' && url.username === '' && url.password === ''
+    return url.protocol === 'https:' && url.origin === REGISTRY_ORIGIN && url.username === '' && url.password === ''
   } catch (err) {
     return false
   }
+}
+
+function normalizeRepository(value) {
+  const raw = value && typeof value === 'object' ? value.url : value
+  if (typeof raw !== 'string' || raw.length > 1000) return ''
+  try {
+    const parsed = new URL(raw.replace(/^git\+/, ''))
+    if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== 'github.com') return ''
+    return `${parsed.origin}${parsed.pathname.replace(/\.git$/i, '').replace(/\/$/, '')}`
+  } catch (_) {
+    return ''
+  }
+}
+
+function normalizeAttestations(dist) {
+  const raw = dist && typeof dist.attestations === 'object' && dist.attestations ? dist.attestations : null
+  if (!raw) return null
+  let url = ''
+  try {
+    const parsed = new URL(raw.url)
+    if (parsed.protocol === 'https:' && parsed.origin === REGISTRY_ORIGIN && !parsed.username && !parsed.password) url = parsed.href
+  } catch (_) { /* invalid */ }
+  const provenance = raw.provenance && typeof raw.provenance === 'object' ? raw.provenance : null
+  const predicateType = provenance && typeof provenance.predicateType === 'string' ? provenance.predicateType.trim().slice(0, 500) : ''
+  if (!url || !SLSA_PROVENANCE_PREDICATES.has(predicateType)) return null
+  return { url, predicateType }
+}
+
+function normalizeRegistrySignatures(dist) {
+  const raw = dist && Array.isArray(dist.signatures) ? dist.signatures : []
+  const signatures = []
+  for (const item of raw.slice(0, 20)) {
+    if (!item || typeof item !== 'object') continue
+    const keyid = typeof item.keyid === 'string' ? item.keyid.trim() : ''
+    const sig = typeof item.sig === 'string' ? item.sig.trim() : ''
+    if (!/^SHA256:[A-Za-z0-9+/_=-]{8,180}$/.test(keyid)) continue
+    if (sig.length < 40 || sig.length > 4096 || !/^[A-Za-z0-9+/]+={0,2}$/.test(sig)) continue
+    if (!signatures.some((entry) => entry.keyid === keyid && entry.sig === sig)) signatures.push({ keyid, sig })
+  }
+  return signatures
 }
 
 function hasLifecycleScripts(pkg) {
@@ -83,12 +128,20 @@ function normalizeRegistryRelease(metadata, channel = 'stable') {
     throw new Error('registry package is missing sha512 integrity')
   }
   if (!isHttpsRegistryTarball(dist.tarball)) throw new Error('registry tarball URL is not trusted')
+  const repository = normalizeRepository(pkg.repository)
+  if (repository !== EXPECTED_REPOSITORY) throw new Error('registry package repository identity mismatch')
+  const attestations = normalizeAttestations(dist)
+  const signatures = normalizeRegistrySignatures(dist)
+  if (signatures.length === 0) throw new Error('registry package is missing a valid npm signature record')
   const publishedAt = metadata.time && typeof metadata.time[version] === 'string' ? metadata.time[version] : null
   return {
     packageName: PACKAGE_NAME,
     version,
     integrity: dist.integrity,
     tarball: dist.tarball,
+    repository,
+    attestations,
+    signatures,
     publishedAt,
     deprecated: typeof pkg.deprecated === 'string' && pkg.deprecated.trim() ? pkg.deprecated.trim().slice(0, 500) : null,
     lifecycleScripts: hasLifecycleScripts(pkg),
@@ -120,16 +173,21 @@ function shouldCheck(lastCheckedAt, now = Date.now(), intervalMs = 24 * 60 * 60 
 }
 
 module.exports = {
+  EXPECTED_REPOSITORY,
   PACKAGE_NAME,
   REGISTRY_ORIGIN,
   REGISTRY_URL,
   OSV_URL,
+  SLSA_PROVENANCE_PREDICATES,
   compareVersions,
   isDshBinArgument,
   isHttpsRegistryTarball,
   isSafeVersion,
+  normalizeAttestations,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRegistrySignatures,
+  normalizeRepository,
   parseVersion,
   selectRegistryTag,
   shouldCheck,

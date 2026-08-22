@@ -319,26 +319,29 @@ async function assessPackage(packageName, logResult) {
 }
 
 async function securityGate(packageName) {
-  // Always refresh immediately before an install/update. A previous green
-  // badge is informational only and cannot be replayed to bypass the gate.
+  // Always refresh immediately before an install/update. The returned immutable
+  // plan binds the exact version/registry/tarball/integrity that was assessed.
   securityResults.delete(packageName)
   const result = await assessPackage(packageName, true)
   const assessment = result && result.assessment
-  if (!assessment || assessment.blocked) {
-    append(`\n已阻止：${packageName} 未通过市场安全门禁。可查看风险原因；高级手动入口仍保留给明确了解风险的用户。\n`)
-    return false
+  const plan = result && result.installationPlan
+  if (!assessment || assessment.blocked || !plan) {
+    append(`\n已阻止：${packageName} 未通过市场安全门禁或无法绑定精确安装对象。高级手动入口仍保留给明确了解风险的用户。\n`)
+    return null
   }
   if (assessment.requiresConfirmation) {
     const reasons = Array.isArray(assessment.reasons) ? assessment.reasons.slice(0, 4).join('\n• ') : ''
-    return window.confirm(`插件 ${packageName} 被评为高风险（${assessment.score}/100）。\n\n• ${reasons}\n\n仍要继续吗？`)
+    const confirmed = window.confirm(`插件 ${packageName} 被评为高风险（${assessment.score}/100）。\n\n• ${reasons}\n\n仍要继续吗？`)
+    if (!confirmed) return null
   }
-  return true
+  return plan
 }
 
 async function runMarketAction(action, spec) {
   if (action === 'install' || action === 'update') {
-    const allowed = await securityGate(spec)
-    if (!allowed) return
+    const plan = await securityGate(spec)
+    if (!plan) return
+    return runAction(action, plan)
   }
   return runAction(action, spec)
 }
@@ -349,7 +352,8 @@ async function runAction(action, spec) {
   if (output.textContent === '等待操作…') output.textContent = ''
   setRunning(true)
   const labels = { install: '安装', update: '升级', remove: '卸载' }
-  append(`\n> ${labels[action] || action} ${spec}\n\n`)
+  const displaySpec = spec && typeof spec === 'object' && spec.spec ? spec.spec : spec
+  append(`\n> ${labels[action] || action} ${displaySpec}\n\n`)
   try {
     const result = await bridge.run(action, spec)
     if (result && result.needsRestart) setRestart(true)

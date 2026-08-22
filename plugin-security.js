@@ -1,5 +1,7 @@
 'use strict'
 
+const { readJsonLimited } = require('./secure-fetch')
+
 const NPM_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const OSV_QUERY_URL = 'https://api.osv.dev/v1/query'
 const FETCH_TIMEOUT_MS = 6000
@@ -30,6 +32,19 @@ function safeHttpsUrl(value) {
   }
 }
 
+function safeRegistryTarball(value) {
+  const raw = cleanText(value, 1800)
+  if (!raw) return ''
+  try {
+    const parsed = new URL(raw)
+    if (parsed.protocol !== 'https:' || parsed.origin !== NPM_REGISTRY_ORIGIN) return ''
+    if (parsed.username || parsed.password) return ''
+    return parsed.href
+  } catch (_) {
+    return ''
+  }
+}
+
 function npmMetadataUrl(packageName) {
   if (!isPackageName(packageName)) throw new Error('非法 npm 包名。')
   return `${NPM_REGISTRY_ORIGIN}/${encodeURIComponent(packageName)}`
@@ -51,16 +66,11 @@ async function requestJson(url, options = {}, limits = {}) {
       }, options.headers || {}),
       body: options.body,
     })
-    if (!response || !response.ok) {
-      throw new Error(`安全评估请求失败（HTTP ${response ? response.status : 'unknown'}）。`)
-    }
-    const body = await response.text()
-    const maxBytes = limits.maxBytes || MAX_METADATA_BYTES
-    if (Buffer.byteLength(body, 'utf8') > maxBytes) throw new Error('安全评估响应过大。')
-    return JSON.parse(body)
+    return await readJsonLimited(response, limits.maxBytes || MAX_METADATA_BYTES, {
+      label: '安全评估响应',
+    })
   } catch (error) {
     if (error && error.name === 'AbortError') throw new Error('安全评估请求超时。')
-    if (error instanceof SyntaxError) throw new Error('安全评估服务返回了无效 JSON。')
     throw error
   } finally {
     clearTimeout(timer)
@@ -101,6 +111,7 @@ function normalizeNpmMetadata(packageName, payload) {
     lifecycleScripts,
     integrity: cleanText(dist.integrity, 500),
     shasum: cleanText(dist.shasum, 100),
+    tarball: safeRegistryTarball(dist.tarball),
     repository: safeHttpsUrl(repositoryValue),
     deprecated: cleanText(version.deprecated, 500),
   }
@@ -137,6 +148,17 @@ function daysSince(value, now = Date.now()) {
   const timestamp = Date.parse(value)
   if (!Number.isFinite(timestamp)) return null
   return Math.max(0, (now - timestamp) / 86400000)
+}
+
+function riskFlags(score) {
+  const bounded = Math.min(100, Math.max(0, Number(score) || 0))
+  const level = bounded >= 70 ? 'critical' : bounded >= 45 ? 'high' : bounded >= 20 ? 'medium' : 'low'
+  return {
+    score: bounded,
+    level,
+    blocked: level === 'critical',
+    requiresConfirmation: level === 'high',
+  }
 }
 
 function assessNormalizedMetadata(metadata, vulnerabilities = [], now = Date.now()) {
@@ -179,6 +201,13 @@ function assessNormalizedMetadata(metadata, vulnerabilities = [], now = Date.now
     positives.push('发布包包含完整性摘要')
   }
 
+  if (!metadata.tarball) {
+    score += 30
+    reasons.push('发布包 tarball 不是受信任的官方 npm HTTPS 地址')
+  } else {
+    positives.push('tarball 固定为官方 npm Registry HTTPS 地址')
+  }
+
   if (!metadata.repository) {
     score += 8
     reasons.push('未提供可验证的 HTTPS 代码仓库地址')
@@ -212,17 +241,25 @@ function assessNormalizedMetadata(metadata, vulnerabilities = [], now = Date.now
     positives.push('OSV 未发现该版本的已知漏洞')
   }
 
-  score = Math.min(100, score)
-  const level = score >= 70 ? 'critical' : score >= 45 ? 'high' : score >= 20 ? 'medium' : 'low'
-  return {
-    score,
-    level,
-    blocked: level === 'critical',
-    requiresConfirmation: level === 'high',
+  return Object.assign(riskFlags(score), {
     reasons,
     positives,
     vulnerabilities,
-  }
+  })
+}
+
+function makeInstallationPlan(metadata) {
+  if (!metadata || !isPackageName(metadata.packageName)) return null
+  if (!metadata.latestVersion || !metadata.integrity || !metadata.tarball) return null
+  return Object.freeze({
+    packageName: metadata.packageName,
+    version: metadata.latestVersion,
+    spec: `${metadata.packageName}@${metadata.latestVersion}`,
+    registry: `${NPM_REGISTRY_ORIGIN}/`,
+    tarball: metadata.tarball,
+    integrity: metadata.integrity,
+    shasum: metadata.shasum || '',
+  })
 }
 
 async function assessPackageSecurity(packageName, options = {}) {
@@ -238,15 +275,27 @@ async function assessPackageSecurity(packageName, options = {}) {
     }
     const assessment = assessNormalizedMetadata(metadata, vulnerabilities, options.now || Date.now())
     if (osvError) {
-      assessment.score = Math.min(100, assessment.score + 20)
-      assessment.reasons.push(`OSV 漏洞查询不可用：${osvError}`)
-      if (assessment.level === 'low') assessment.level = 'medium'
+      assessment.score = 100
+      assessment.level = 'unknown'
+      assessment.blocked = true
+      assessment.requiresConfirmation = false
+      assessment.positives = assessment.positives.filter((item) => !item.startsWith('OSV 未发现'))
+      assessment.reasons.push(`OSV 漏洞查询不可用，市场安装按 fail-closed 阻止：${osvError}`)
+    }
+    const installationPlan = assessment.blocked ? null : makeInstallationPlan(metadata)
+    if (!assessment.blocked && !installationPlan) {
+      assessment.score = 100
+      assessment.level = 'unknown'
+      assessment.blocked = true
+      assessment.requiresConfirmation = false
+      assessment.reasons.push('无法生成绑定精确版本、官方 Registry、tarball 与 integrity 的安装计划。')
     }
     return {
       ok: true,
       checkedAt: Date.now(),
       metadata,
       assessment,
+      installationPlan: assessment.blocked ? null : installationPlan,
       osvError,
     }
   } catch (error) {
@@ -254,6 +303,7 @@ async function assessPackageSecurity(packageName, options = {}) {
       ok: false,
       checkedAt: Date.now(),
       metadata: null,
+      installationPlan: null,
       assessment: {
         score: 100,
         level: 'unknown',
@@ -276,8 +326,11 @@ module.exports = {
   fetchNpmMetadata,
   fetchOsv,
   isPackageName,
+  makeInstallationPlan,
   normalizeNpmMetadata,
   normalizeOsv,
   npmMetadataUrl,
   requestJson,
+  riskFlags,
+  safeRegistryTarball,
 }

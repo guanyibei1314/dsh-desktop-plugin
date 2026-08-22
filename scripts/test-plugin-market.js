@@ -44,6 +44,13 @@ function fixture() {
   }
 }
 
+function jsonResponse(value) {
+  return new Response(JSON.stringify(value), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  })
+}
+
 async function main() {
   const normalized = normalizeRegistry(fixture())
   assert.equal(normalized.count, 2)
@@ -60,11 +67,7 @@ async function main() {
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dsh-market-test-'))
   const cachePath = path.join(dir, 'plugin-market-cache.json')
-  const liveFetch = async () => ({
-    ok: true,
-    status: 200,
-    text: async () => JSON.stringify(fixture()),
-  })
+  const liveFetch = async () => jsonResponse(fixture())
   const live = await loadPluginCatalog(cachePath, { fetchImpl: liveFetch })
   assert.equal(live.ok, true)
   assert.equal(live.source, 'live')

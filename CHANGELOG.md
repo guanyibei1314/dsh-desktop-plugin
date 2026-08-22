@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.2 — 2026-08-22 (release candidate)
+
+- 安全加固版本：修复提权安装器从不可信 PATH 探测/执行 Node/Git 的边界，改为仅识别 machine-owned Program Files 路径，并加入攻击复现回归。
+- 插件市场 OSV 不可用时改为 fail-closed；市场一键安装/升级绑定 **exact version + official npm Registry + exact tarball + SHA-512 integrity**，安装后再次核对 integrity，失败自动回滚。
+- 移除默认信任固定 `127.0.0.1:3080` 的行为；DSH Desktop 默认拥有自己启动的随机 loopback Runtime，只有用户显式配置外部 DSH URL 才复用外部服务。
+- 主 Harness Electron Session 改为权限默认拒绝，并把导航/重定向限制在当前可信 Harness origin。
+- npm/OSV/Runtime/RPC 等远端 JSON 读取统一加入 streaming byte limits，在分配完整响应前执行硬上限检查。
+- Runtime 自动更新除官方 npm Registry、版本、tarball 和 SHA-512 外，强制验证 **exact `@deepseek-ai/dsh@version:integrity` npm Registry ECDSA 签名 + npm 官方 signing keys + DeepSeek 官方 immutable GitHub Release + exact tag `apps/cli/package.json` identity**；如果上游发布 provenance metadata 则记录该状态，但不再用会扫描整棵依赖树的 `npm audit signatures` 作为唯一放行路径。所有 publisher identity 校验完成前禁止执行候选 Runtime JavaScript。
+- 修复 Windows/Electron 以 Node 模式运行 pnpm 时可能在 `pnpm --ignore-scripts` 已完成落盘后返回 `0x80000003` 的清理退出码；仅当输出明确包含 pnpm `Done` 且退出码精确匹配时才允许继续进入严格 package/version/repository、lock integrity、ECDSA 与 immutable GitHub 后置校验，任一校验失败仍 fail-closed。
+- GitHub Actions 全部固定到 40 位 immutable commit SHA，新增 workflow 回归门禁、CODEOWNERS 与 Dependabot；正式 Release commit 必须关联已合并到 `main` 的 PR。
+- 正式 Windows Release 改为 fail-closed Authenticode：构建产物必须具有有效受信签名且 Publisher Subject 与仓库 secret 固定值一致；publish 下载同一 artifact 后再次验证 Authenticode 与 SHA-256。
+- Desktop 版本升级到 **0.9.2**；开发期间 DeepSeek Harness 官方 stable 再次更新，全部直接 `@deepseek-ai/dsh-*` 依赖统一对齐到 **`0.1.1-rc.2`**，`package-lock.json` 通过一次性 `--package-lock-only --ignore-scripts` workflow 受控重建并随后删除临时 workflow。
+- v0.9.1 的完整 Node.js 24.19.0 LTS + Git for Windows 2.55.0(5)、Machine PATH、Runtime GUI、junction-aware GC、Skin Center、插件市场与三轮真实安装 E2E 继续保留。
+- 本节在正式 GitHub Release 成功前保持 release candidate 状态；正式安装包 SHA-256 只以 v0.9.2 Release Notes 与 `.exe.sha256` asset 为权威。
+
 ## 0.9.1 — 2026-08-21
 
 - Windows 安装包改为 **per-machine**，完整官方 Node.js 与 Git for Windows 在缺失时自动安装到系统环境。

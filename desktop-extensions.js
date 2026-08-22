@@ -26,6 +26,7 @@ const SITES_HTML = path.join(__dirname, 'sites.html')
 const SITES_PRELOAD = path.join(__dirname, 'sites-preload.js')
 const WEB_PROFILE = 'web'
 const TOOLBAR_HEIGHT = 58
+const NPM_REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 
 let registered = false
 let pluginWindow = null
@@ -108,6 +109,7 @@ function pluginEnvironment() {
     npm_config_runtime: 'electron',
     npm_config_target: process.versions.electron || '',
     npm_config_disturl: 'https://electronjs.org/headers',
+    npm_config_registry: `${NPM_REGISTRY_ORIGIN}/`,
   })
 }
 
@@ -148,14 +150,39 @@ function isSafeVersion(value) {
   return /^(?:latest|next|beta|alpha|rc|canary|\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/i.test(value)
 }
 
+function validateInstallationPlan(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('市场安装计划无效。')
+  const packageName = String(value.packageName || '').trim()
+  const version = String(value.version || '').trim()
+  const spec = String(value.spec || '').trim()
+  const registry = String(value.registry || '').trim()
+  const integrity = String(value.integrity || '').trim()
+  const tarball = String(value.tarball || '').trim()
+  if (!isPackageName(packageName) || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) throw new Error('市场安装计划包名/版本无效。')
+  if (spec !== `${packageName}@${version}`) throw new Error('市场安装计划 spec 与精确版本不一致。')
+  if (registry !== `${NPM_REGISTRY_ORIGIN}/`) throw new Error('市场安装计划 Registry 不是官方 npm。')
+  if (!/^sha512-[A-Za-z0-9+/=]+$/.test(integrity)) throw new Error('市场安装计划 integrity 无效。')
+  try {
+    const parsed = new URL(tarball)
+    if (parsed.protocol !== 'https:' || parsed.origin !== NPM_REGISTRY_ORIGIN || parsed.username || parsed.password) {
+      throw new Error('untrusted tarball')
+    }
+  } catch (_) {
+    throw new Error('市场安装计划 tarball 不是官方 npm HTTPS 地址。')
+  }
+  return { packageName, version, spec, registry, integrity, tarball }
+}
+
 function pluginArgs(action, rawSpec) {
   if (action === 'list') return ['list', '--depth', '0']
   if (action === 'install') {
+    if (rawSpec && typeof rawSpec === 'object') return ['add', validateInstallationPlan(rawSpec).spec]
     const parsed = parseInstallSpec(rawSpec)
     if (!parsed) throw new Error('仅支持 npm Registry 包名，可选 latest/next/beta/alpha/rc/canary 或精确版本号。')
     return ['add', parsed.spec]
   }
   if (action === 'update') {
+    if (rawSpec && typeof rawSpec === 'object') return ['add', validateInstallationPlan(rawSpec).spec]
     const name = String(rawSpec || '').trim()
     if (!isPackageName(name)) throw new Error('升级时请输入合法的 npm 包名。')
     return ['update', name]
@@ -186,10 +213,40 @@ function sendPlugin(channel, payload) {
   pluginWindow.webContents.send(channel, payload)
 }
 
+function profileRoot() {
+  return path.join(dshHomeDir(), 'profiles', WEB_PROFILE)
+}
+
+function verifyInstalledPluginPlan(plan) {
+  const pkgPath = path.join(profileRoot(), 'node_modules', ...plan.packageName.split('/'), 'package.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'))
+  if (pkg.name !== plan.packageName || pkg.version !== plan.version) {
+    throw new Error('插件安装后的 name/version 与安全预检对象不一致。')
+  }
+  const lock = fs.readFileSync(path.join(profileRoot(), 'pnpm-lock.yaml'), 'utf8')
+  if (!lock.includes(plan.integrity)) throw new Error('插件安装后的 lock integrity 与安全预检不一致。')
+  return true
+}
+
+function rollbackPluginPlan(plan) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [
+      '--expose-internals', dshBinPath(), 'plugin', '--profile', WEB_PROFILE, 'remove', plan.packageName,
+    ], { cwd: app.getPath('home'), windowsHide: true, stdio: 'ignore', env: pluginEnvironment() })
+    const timer = setTimeout(() => { terminateTree(child); resolve(false) }, 60000)
+    child.once('error', () => { clearTimeout(timer); resolve(false) })
+    child.once('exit', (code) => { clearTimeout(timer); resolve(code === 0) })
+  })
+}
+
 function runPlugin(action, rawSpec) {
   if (pluginProcess) return Promise.reject(new Error('已有插件操作正在执行。'))
   if (!fs.existsSync(dshBinPath())) return Promise.reject(new Error('内置 DSH CLI 缺失，请重新安装。'))
-  const args = pluginArgs(action, rawSpec)
+  let plan = null
+  if ((action === 'install' || action === 'update') && rawSpec && typeof rawSpec === 'object') {
+    plan = validateInstallationPlan(rawSpec)
+  }
+  const args = pluginArgs(action, plan || rawSpec)
   fs.mkdirSync(dshHomeDir(), { recursive: true })
 
   return new Promise((resolve, reject) => {
@@ -220,11 +277,21 @@ function runPlugin(action, rawSpec) {
       sendPlugin('plugin:state', { running: false, action, needsRestart: pluginNeedsRestart })
       reject(err)
     })
-    child.once('exit', (code, signal) => {
+    child.once('exit', async (code, signal) => {
       if (pluginProcess === child) pluginProcess = null
+      if (code === 0 && plan) {
+        try {
+          verifyInstalledPluginPlan(plan)
+        } catch (error) {
+          await rollbackPluginPlan(plan)
+          sendPlugin('plugin:state', { running: false, action, needsRestart: pluginNeedsRestart })
+          reject(new Error(`插件安全安装后验证失败，已尝试回滚：${error.message}`))
+          return
+        }
+      }
       if (code === 0 && action !== 'list') pluginNeedsRestart = true
       sendPlugin('plugin:state', { running: false, action, needsRestart: pluginNeedsRestart })
-      const result = { ok: code === 0, code, signal, output, needsRestart: pluginNeedsRestart }
+      const result = { ok: code === 0, code, signal, output, needsRestart: pluginNeedsRestart, verifiedPlan: plan || null }
       if (code === 0) resolve(result)
       else reject(Object.assign(new Error(`插件操作失败（退出码 ${code === null ? 'null' : code}）`), { result }))
     })

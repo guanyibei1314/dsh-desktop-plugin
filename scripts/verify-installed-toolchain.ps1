@@ -54,10 +54,21 @@ function Assert-FilePresent {
   Write-Host "[toolchain-e2e] $Name present: $Path"
 }
 
+function Uninstall-Dsh {
+  param([string]$InstallDir)
+  $uninstaller = Get-ChildItem -Path $InstallDir -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($null -eq $uninstaller) { throw "DSH uninstaller missing after install: $InstallDir" }
+  $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
+  if ($uninstall.ExitCode -ne 0) { throw "DSH uninstall failed with exit code $($uninstall.ExitCode): $InstallDir" }
+}
+
 if (-not (Test-Path -LiteralPath $InstallerPath)) { throw "installer not found: $InstallerPath" }
 $InstallerPath = (Resolve-Path -LiteralPath $InstallerPath).Path
 $installDir = Join-Path $env:RUNNER_TEMP 'dsh-desktop-toolchain-e2e'
-if (Test-Path -LiteralPath $installDir) { Remove-Item -LiteralPath $installDir -Recurse -Force }
+$hijackInstallDir = Join-Path $env:RUNNER_TEMP 'dsh-desktop-toolchain-hijack-e2e'
+foreach ($dir in @($installDir, $hijackInstallDir)) {
+  if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force }
+}
 
 $nodeDir = Join-Path $env:ProgramFiles 'nodejs'
 $nodeExe = Join-Path $nodeDir 'node.exe'
@@ -100,12 +111,8 @@ Write-Host "[toolchain-e2e] Git LFS verified: $gitLfs"
 $pathState = Get-PersistedPathSnapshot
 $nodeInMachine = Test-PathContains -PathValue $pathState.Machine -Expected $nodeDir
 $gitInMachine = Test-PathContains -PathValue $pathState.Machine -Expected $gitCmdDir
-if (-not $nodeInMachine) {
-  throw "Node.js install succeeded but Machine PATH does not contain $nodeDir"
-}
-if (-not $gitInMachine) {
-  throw "Git install succeeded but Machine PATH does not contain $gitCmdDir"
-}
+if (-not $nodeInMachine) { throw "Node.js install succeeded but Machine PATH does not contain $nodeDir" }
+if (-not $gitInMachine) { throw "Git install succeeded but Machine PATH does not contain $gitCmdDir" }
 Write-Host '[toolchain-e2e] Machine PATH contains full Node.js and Git for Windows'
 
 $oldPath = $env:Path
@@ -126,20 +133,60 @@ try {
   $env:Path = $oldPath
 }
 
-$uninstaller = Get-ChildItem -Path $installDir -Filter 'Uninstall*.exe' -File | Select-Object -First 1
-if ($null -eq $uninstaller) { throw 'DSH uninstaller missing after install' }
-$uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -PassThru -Wait
-if ($uninstall.ExitCode -ne 0) { throw "DSH uninstall failed with exit code $($uninstall.ExitCode)" }
+# A per-machine Electron/NSIS application has one uninstall registration. Do not
+# keep two simultaneous DSH installs with the same AppID just to exercise the
+# PATH-hijack case: a second install can legitimately reuse/replace the first
+# uninstall registration. Uninstall the first DSH instance now and prove that
+# the independently installed system toolchain survives before reinstalling DSH.
+Uninstall-Dsh -InstallDir $installDir
+Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after first DSH uninstall'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git after first DSH uninstall'
+Assert-FilePresent -Path $gitBash -Name 'Git Bash after first DSH uninstall'
+$pathAfterFirstUninstall = Get-PersistedPathSnapshot
+if (-not (Test-PathContains -PathValue $pathAfterFirstUninstall.Machine -Expected $nodeDir)) { throw 'first DSH uninstall incorrectly removed the Node.js Machine PATH entry' }
+if (-not (Test-PathContains -PathValue $pathAfterFirstUninstall.Machine -Expected $gitCmdDir)) { throw 'first DSH uninstall incorrectly removed the Git Machine PATH entry' }
+Write-Host '[toolchain-e2e] first DSH uninstall preserved independent full Node/Git toolchain'
+
+# Red-team the normal (non-force) detection path. A standard user can prepend
+# writable PATH entries before approving UAC; elevated setup must never execute
+# or trust those entries. Existing trusted Program Files tools should be found
+# through fixed machine-owned paths instead.
+$fakeDir = Join-Path $env:RUNNER_TEMP 'dsh-path-hijack-fixture'
+$marker = Join-Path $fakeDir 'EXECUTED.txt'
+if (Test-Path -LiteralPath $fakeDir) { Remove-Item -LiteralPath $fakeDir -Recurse -Force }
+New-Item -ItemType Directory -Path $fakeDir | Out-Null
+Set-Content -LiteralPath (Join-Path $fakeDir 'node.cmd') -Encoding ascii -Value "@echo off`r`necho node>>`"$marker`"`r`nexit /b 0`r`n"
+Set-Content -LiteralPath (Join-Path $fakeDir 'git.cmd') -Encoding ascii -Value "@echo off`r`necho git>>`"$marker`"`r`nexit /b 0`r`n"
+$oldPath = $env:Path
+$oldForce = $env:DSH_TOOLCHAIN_FORCE_INSTALL
+try {
+  Remove-Item Env:DSH_TOOLCHAIN_FORCE_INSTALL -ErrorAction SilentlyContinue
+  $env:Path = "$fakeDir;$oldPath"
+  Write-Host '[toolchain-e2e] red-team reinstall with fake node/git at front of inherited PATH'
+  $hijackInstall = Start-Process -FilePath $InstallerPath -ArgumentList @('/S', "/D=$hijackInstallDir") -PassThru -Wait
+  if ($hijackInstall.ExitCode -ne 0) { throw "PATH-hijack regression install failed with exit code $($hijackInstall.ExitCode)" }
+  $hijackDesktopExe = Join-Path $hijackInstallDir 'DSH Desktop.exe'
+  if (-not (Test-Path -LiteralPath $hijackDesktopExe)) { throw "PATH-hijack DSH executable missing after install: $hijackDesktopExe" }
+  if (Test-Path -LiteralPath $marker) {
+    throw "elevated installer executed user-controlled PATH command: $(Get-Content -LiteralPath $marker -Raw)"
+  }
+  Write-Host '[toolchain-e2e] fake user PATH node/git were not executed by elevated setup'
+} finally {
+  $env:Path = $oldPath
+  if ($null -eq $oldForce) {
+    Remove-Item Env:DSH_TOOLCHAIN_FORCE_INSTALL -ErrorAction SilentlyContinue
+  } else {
+    $env:DSH_TOOLCHAIN_FORCE_INSTALL = $oldForce
+  }
+}
+
+Uninstall-Dsh -InstallDir $hijackInstallDir
 
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after DSH uninstall'
 Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git after DSH uninstall'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash after DSH uninstall'
 $afterPath = Get-PersistedPathSnapshot
-if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir)) {
-  throw 'DSH uninstall incorrectly removed the Node.js Machine PATH entry'
-}
-if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir)) {
-  throw 'DSH uninstall incorrectly removed the Git Machine PATH entry'
-}
+if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir)) { throw 'DSH uninstall incorrectly removed the Node.js Machine PATH entry' }
+if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir)) { throw 'DSH uninstall incorrectly removed the Git Machine PATH entry' }
 
-Write-Host '[toolchain-e2e] full Node.js + full Git system installation, Machine PATH and DSH-uninstall independence passed'
+Write-Host '[toolchain-e2e] full Node.js + full Git system installation, Machine PATH, serialized PATH-hijack resistance and DSH-uninstall independence passed'
