@@ -18,29 +18,15 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Update handoff and development log
+      - name: Correct markdown fences
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-
-          handoff = Path('HANDOFF.md')
-          text = handoff.read_text(encoding='utf-8')
-          text = text.replace('> 最后更新：2026-08-21  ', '> 最后更新：2026-08-22  ', 1)
-          text = text.replace('> 当前正式版本：`v0.9.1`  ', '> 当前正式版本：`v0.9.1`（`v0.9.2` 代码已合并 main，但正式 Release 被 Authenticode 门禁阻断）  ', 1)
-          marker = '> 仓库：`guanyibei1314/dsh-desktop-plugin`\n'
-          section = '''\n## 0. v0.9.2 Security Hardening 当前状态（2026-08-22）\n\n`v0.9.2` 安全修复已通过 PR #14 合并到 `main`：\n\n```text\nPR #14 final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae\nPR #14 merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b\nmessage: release: v0.9.2\nPR Windows build #127: success\n````\n\n#127 已通过完整 Windows 发布候选门禁：Runtime exact npm Registry ECDSA + npm official signing keys + DeepSeek immutable GitHub Release/source identity、插件安全 functional/red-blue、Node/Git/Machine PATH/PATH-hijack E2E、installed Runtime、installed live market、安全预检、三轮 clean-install/cold-start/restart/uninstall、package audit、size、SHA-256 和 artifact upload。\n\n正式 main push run `32552010032` 在 Authenticode release policy 被 fail-closed：\n\n```text\nDSH_REQUIRE_SIGNED_INSTALLER=true\nDSH_WINDOWS_SIGNING_SUBJECT=<empty>\nDSH-Desktop-Setup-0.9.2.exe status=NotSigned\n````\n\n因此 **v0.9.2 tag / GitHub Release 尚未生成**。当前唯一外部发布阻塞是仓库没有配置受信任的 Windows Authenticode 代码签名身份（`DSH_WINDOWS_CSC_LINK` / `DSH_WINDOWS_CSC_KEY_PASSWORD` / `DSH_WINDOWS_SIGNING_SUBJECT`）。不得通过关闭签名门禁、使用自签证书冒充受信 Publisher、或发布未签名正式版来绕过。\n\n在签名身份配置完成后，重新创建 `release: v0.9.2` main release trigger，正式 workflow 必须重新跑全链并在 publish job 再次验证 Authenticode + SHA-256 后才允许创建 `v0.9.2` Release。\n'''
-          if '## 0. v0.9.2 Security Hardening 当前状态' not in text:
-              text = text.replace(marker, marker + section, 1)
-          handoff.write_text(text, encoding='utf-8')
-
-          log = Path('DEVELOPMENT_LOG.md')
-          text = log.read_text(encoding='utf-8')
-          marker = '> 当前工程日志：v0.9.x。v0.4–v0.8 历史记录已原样归档到 `docs/history/DEVELOPMENT_LOG-v0.4-v0.8.md`。\n'
-          section = '''\n## 2026-08-22 — v0.9.2 Security Hardening / Release signing blocker\n\n### 安全修复与最终候选\n\nPR #14 `release: v0.9.2 security hardening` 已合并 `main`。\n\n```text\nfinal head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae\nmerge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b\nWindows build #127: success\n````\n\n#127 全链通过，包括：\n\n1. installer/main/stream/workflow security regression；\n2. Runtime functional + red-blue；\n3. DeepSeek Harness `0.1.1-rc.2` official stable gate；\n4. exact npm Registry ECDSA + npm official signing keys；\n5. DeepSeek immutable GitHub Release + exact tag source package identity；\n6. plugin market functional/red-blue + immutable install plan + OSV fail-closed；\n7. full Node 24.19.0 / npm 11.17.0 / Git 2.55.0.windows.5 / Bash / GUI / LFS / Machine PATH；\n8. elevated PATH-hijack red-team E2E；\n9. installed official Runtime update chain；\n10. installed live marketplace + security preflight；\n11. 3 × clean install -> cold start -> restart -> uninstall；\n12. package/runtime audit、installer size、SHA-256、artifact upload。\n\n### 正式 Release run 32552010032 — fail-closed\n\n正式 main `release: v0.9.2` push 于 2026-08-22 04:33:25 UTC 启动，04:37:30 UTC 失败。失败发生在 `Verify Authenticode release policy`：\n\n```text\nDSH_REQUIRE_SIGNED_INSTALLER: true\nDSH_WINDOWS_SIGNING_SUBJECT: <empty>\nDSH-Desktop-Setup-0.9.2.exe status=NotSigned\npublic release requires a valid trusted Authenticode signature\n````\n\n这不是产品代码、Runtime、Node/Git 或 E2E 失败；它证明 v0.9.2 新增的正式发布签名门禁正在 fail-closed。仓库当前没有已配置的受信 Windows 代码签名证书/Publisher identity，因此 `v0.9.2` tag/Release 尚未创建。\n\n发布恢复条件：配置真实受信代码签名身份和仓库 Secrets：\n\n```text\nDSH_WINDOWS_CSC_LINK\nDSH_WINDOWS_CSC_KEY_PASSWORD\nDSH_WINDOWS_SIGNING_SUBJECT\n````\n\n随后重新触发 `release: v0.9.2`，不得关闭 Authenticode gate 或用自签证书伪装正式 Publisher。\n'''
-          if '## 2026-08-22 — v0.9.2 Security Hardening / Release signing blocker' not in text:
-              text = text.replace(marker, marker + section, 1)
-          log.write_text(text, encoding='utf-8')
+          for name in ('HANDOFF.md', 'DEVELOPMENT_LOG.md'):
+              p = Path(name)
+              text = p.read_text(encoding='utf-8').replace('````', '```')
+              p.write_text(text, encoding='utf-8')
           PY
 
       - name: Commit docs
@@ -50,5 +36,5 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add HANDOFF.md DEVELOPMENT_LOG.md
           git diff --cached --quiet && exit 0
-          git commit -m 'docs: record v0.9.2 release signing blocker'
+          git commit -m 'docs: fix v0.9.2 release status formatting'
           git push
