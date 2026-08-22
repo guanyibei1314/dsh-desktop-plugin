@@ -1,9 +1,34 @@
 # DSH Desktop 交接文档
 
-> 最后更新：2026-08-21  
-> 当前正式版本：`v0.9.1`  
+> 最后更新：2026-08-22  
+> 当前正式版本：`v0.9.1`（`v0.9.2` 代码已合并 main，但正式 Release 被 Authenticode 门禁阻断）  
 > 正式发布平台：Windows x64  
 > 仓库：`guanyibei1314/dsh-desktop-plugin`
+
+## 0. v0.9.2 Security Hardening 当前状态（2026-08-22）
+
+`v0.9.2` 安全修复已通过 PR #14 合并到 `main`：
+
+```text
+PR #14 final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae
+PR #14 merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b
+message: release: v0.9.2
+PR Windows build #127: success
+````
+
+#127 已通过完整 Windows 发布候选门禁：Runtime exact npm Registry ECDSA + npm official signing keys + DeepSeek immutable GitHub Release/source identity、插件安全 functional/red-blue、Node/Git/Machine PATH/PATH-hijack E2E、installed Runtime、installed live market、安全预检、三轮 clean-install/cold-start/restart/uninstall、package audit、size、SHA-256 和 artifact upload。
+
+正式 main push run `32552010032` 在 Authenticode release policy 被 fail-closed：
+
+```text
+DSH_REQUIRE_SIGNED_INSTALLER=true
+DSH_WINDOWS_SIGNING_SUBJECT=<empty>
+DSH-Desktop-Setup-0.9.2.exe status=NotSigned
+````
+
+因此 **v0.9.2 tag / GitHub Release 尚未生成**。当前唯一外部发布阻塞是仓库没有配置受信任的 Windows Authenticode 代码签名身份（`DSH_WINDOWS_CSC_LINK` / `DSH_WINDOWS_CSC_KEY_PASSWORD` / `DSH_WINDOWS_SIGNING_SUBJECT`）。不得通过关闭签名门禁、使用自签证书冒充受信 Publisher、或发布未签名正式版来绕过。
+
+在签名身份配置完成后，重新创建 `release: v0.9.2` main release trigger，正式 workflow 必须重新跑全链并在 publish job 再次验证 Authenticode + SHA-256 后才允许创建 `v0.9.2` Release。
 
 ## 1. 正式发布状态
 

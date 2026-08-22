@@ -2,6 +2,56 @@
 
 > 当前工程日志：v0.9.x。v0.4–v0.8 历史记录已原样归档到 `docs/history/DEVELOPMENT_LOG-v0.4-v0.8.md`。
 
+## 2026-08-22 — v0.9.2 Security Hardening / Release signing blocker
+
+### 安全修复与最终候选
+
+PR #14 `release: v0.9.2 security hardening` 已合并 `main`。
+
+```text
+final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae
+merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b
+Windows build #127: success
+````
+
+#127 全链通过，包括：
+
+1. installer/main/stream/workflow security regression；
+2. Runtime functional + red-blue；
+3. DeepSeek Harness `0.1.1-rc.2` official stable gate；
+4. exact npm Registry ECDSA + npm official signing keys；
+5. DeepSeek immutable GitHub Release + exact tag source package identity；
+6. plugin market functional/red-blue + immutable install plan + OSV fail-closed；
+7. full Node 24.19.0 / npm 11.17.0 / Git 2.55.0.windows.5 / Bash / GUI / LFS / Machine PATH；
+8. elevated PATH-hijack red-team E2E；
+9. installed official Runtime update chain；
+10. installed live marketplace + security preflight；
+11. 3 × clean install -> cold start -> restart -> uninstall；
+12. package/runtime audit、installer size、SHA-256、artifact upload。
+
+### 正式 Release run 32552010032 — fail-closed
+
+正式 main `release: v0.9.2` push 于 2026-08-22 04:33:25 UTC 启动，04:37:30 UTC 失败。失败发生在 `Verify Authenticode release policy`：
+
+```text
+DSH_REQUIRE_SIGNED_INSTALLER: true
+DSH_WINDOWS_SIGNING_SUBJECT: <empty>
+DSH-Desktop-Setup-0.9.2.exe status=NotSigned
+public release requires a valid trusted Authenticode signature
+````
+
+这不是产品代码、Runtime、Node/Git 或 E2E 失败；它证明 v0.9.2 新增的正式发布签名门禁正在 fail-closed。仓库当前没有已配置的受信 Windows 代码签名证书/Publisher identity，因此 `v0.9.2` tag/Release 尚未创建。
+
+发布恢复条件：配置真实受信代码签名身份和仓库 Secrets：
+
+```text
+DSH_WINDOWS_CSC_LINK
+DSH_WINDOWS_CSC_KEY_PASSWORD
+DSH_WINDOWS_SIGNING_SUBJECT
+````
+
+随后重新触发 `release: v0.9.2`，不得关闭 Authenticode gate 或用自签证书伪装正式 Publisher。
+
 ## 2026-08-21 — v0.9.1 完整系统 Node.js + Git 工具链
 
 ### 目标
