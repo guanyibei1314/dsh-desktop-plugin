@@ -14,7 +14,7 @@ PR #14 final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae
 PR #14 merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b
 message: release: v0.9.2
 PR Windows build #127: success
-````
+```
 
 #127 已通过完整 Windows 发布候选门禁：Runtime exact npm Registry ECDSA + npm official signing keys + DeepSeek immutable GitHub Release/source identity、插件安全 functional/red-blue、Node/Git/Machine PATH/PATH-hijack E2E、installed Runtime、installed live market、安全预检、三轮 clean-install/cold-start/restart/uninstall、package audit、size、SHA-256 和 artifact upload。
 
@@ -24,7 +24,7 @@ PR Windows build #127: success
 DSH_REQUIRE_SIGNED_INSTALLER=true
 DSH_WINDOWS_SIGNING_SUBJECT=<empty>
 DSH-Desktop-Setup-0.9.2.exe status=NotSigned
-````
+```
 
 因此 **v0.9.2 tag / GitHub Release 尚未生成**。当前唯一外部发布阻塞是仓库没有配置受信任的 Windows Authenticode 代码签名身份（`DSH_WINDOWS_CSC_LINK` / `DSH_WINDOWS_CSC_KEY_PASSWORD` / `DSH_WINDOWS_SIGNING_SUBJECT`）。不得通过关闭签名门禁、使用自签证书冒充受信 Publisher、或发布未签名正式版来绕过。
 

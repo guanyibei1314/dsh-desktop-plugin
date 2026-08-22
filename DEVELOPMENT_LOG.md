@@ -12,7 +12,7 @@ PR #14 `release: v0.9.2 security hardening` 已合并 `main`。
 final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae
 merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b
 Windows build #127: success
-````
+```
 
 #127 全链通过，包括：
 
@@ -38,7 +38,7 @@ DSH_REQUIRE_SIGNED_INSTALLER: true
 DSH_WINDOWS_SIGNING_SUBJECT: <empty>
 DSH-Desktop-Setup-0.9.2.exe status=NotSigned
 public release requires a valid trusted Authenticode signature
-````
+```
 
 这不是产品代码、Runtime、Node/Git 或 E2E 失败；它证明 v0.9.2 新增的正式发布签名门禁正在 fail-closed。仓库当前没有已配置的受信 Windows 代码签名证书/Publisher identity，因此 `v0.9.2` tag/Release 尚未创建。
 
@@ -48,7 +48,7 @@ public release requires a valid trusted Authenticode signature
 DSH_WINDOWS_CSC_LINK
 DSH_WINDOWS_CSC_KEY_PASSWORD
 DSH_WINDOWS_SIGNING_SUBJECT
-````
+```
 
 随后重新触发 `release: v0.9.2`，不得关闭 Authenticode gate 或用自签证书伪装正式 Publisher。
 
