@@ -21,10 +21,12 @@ const {
 } = require('./runtime-update-core')
 const { readJsonLimited } = require('./secure-fetch')
 const {
+  REGISTRY_KEYS_URL,
   officialReleaseApiUrl,
   officialSourcePackageApiUrl,
   normalizeOfficialGitHubRelease,
   normalizeOfficialSourcePackage,
+  verifyNpmRegistrySignature,
 } = require('./runtime-publisher-auth')
 
 const CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000
@@ -479,59 +481,18 @@ async function verifyRuntimeProvenance(release, installed) {
   if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
     throw new Error('installed DSH repository identity does not match expected publisher source')
   }
-  const npmCli = systemNpmCliPath()
-  if (!npmCli) throw new Error('trusted npm CLI is unavailable for publisher verification')
 
-  const verifyRoot = path.join(runtimeRoot(), 'publisher-verify', `${release.version}-${Date.now()}`)
-  fs.mkdirSync(verifyRoot, { recursive: true })
-  fs.writeFileSync(path.join(verifyRoot, 'package.json'), JSON.stringify({
-    name: 'dsh-runtime-publisher-verifier',
-    private: true,
-    version: '0.0.0',
-    dependencies: { [PACKAGE_NAME]: release.version },
-  }, null, 2), 'utf8')
-  try {
-    await runNpmCli(npmCli, [
-      'install', '--ignore-scripts', '--no-audit', '--no-fund', '--save-exact',
-      `--registry=${REGISTRY_ORIGIN}/`,
-    ], verifyRoot)
-
-    const lock = readJson(path.join(verifyRoot, 'package-lock.json'))
-    const lockEntry = lock && lock.packages && lock.packages[`node_modules/${PACKAGE_NAME}`]
-    if (!lockEntry || lockEntry.version !== release.version || lockEntry.integrity !== release.integrity) {
-      throw new Error('publisher verification workspace does not match expected DSH version/integrity')
-    }
-    const rootPkg = readJson(path.join(verifyRoot, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'))
-    if (!rootPkg || normalizeRepository(rootPkg.repository) !== EXPECTED_REPOSITORY) {
-      throw new Error('publisher verification package repository does not match expected DeepSeek source')
-    }
-
-    const auditArgs = ['audit', 'signatures', '--json', `--registry=${REGISTRY_ORIGIN}/`]
-    if (release.attestations) auditArgs.splice(3, 0, '--include-attestations')
-    const audited = await runNpmCli(npmCli, auditArgs, verifyRoot)
-    let report
-    try { report = JSON.parse(audited.stdout) } catch (_) { throw new Error('npm audit signatures returned invalid JSON') }
-    if (!report || typeof report !== 'object') throw new Error('npm audit signatures returned an invalid report')
-    if (Array.isArray(report.invalid) && report.invalid.length > 0) throw new Error('npm registry signature verification reported invalid signatures')
-    if (Array.isArray(report.missing) && report.missing.length > 0) throw new Error('npm registry signature verification reported missing signatures')
-
-    if (release.attestations) {
-      const verified = Array.isArray(report.verified) ? report.verified : []
-      const payloads = decodedProvenancePayloads(verified)
-      const rootProvenance = payloads.some((payload) =>
-        /provenance/i.test(payload) && payload.includes(PACKAGE_NAME) && payload.includes(release.version))
-      if (!rootProvenance) {
-        throw new Error('verified Sigstore provenance for exact @deepseek-ai/dsh release was not found')
-      }
-      appendLog(`verified npm registry signatures + Sigstore provenance for ${release.version} source=${EXPECTED_REPOSITORY}`)
-    } else {
-      await verifyOfficialGitHubRelease(release)
-      appendLog(`verified npm registry signatures + immutable GitHub source identity for ${release.version}`)
-    }
-    return true
-  } finally {
-    try { fs.rmSync(verifyRoot, { recursive: true, force: true }) } catch (_) { /* best effort */ }
-  }
+  const keysBody = await fetchJson(REGISTRY_KEYS_URL, {
+    method: 'GET',
+    headers: {
+      accept: 'application/json',
+      'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
+    },
+  }, 512 * 1024)
+  const signature = verifyNpmRegistrySignature(release, keysBody)
+  const upstream = await verifyOfficialGitHubRelease(release)
+  appendLog(`verified exact npm Registry ECDSA key=${signature.keyid} + immutable GitHub release ${upstream.tag} source=${EXPECTED_REPOSITORY}${release.attestations ? ' provenance-metadata-present' : ''}`)
+  return true
 }
 
 async function installOfficialVersion(release, options = {}) {
