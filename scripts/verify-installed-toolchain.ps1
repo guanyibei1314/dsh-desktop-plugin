@@ -110,7 +110,11 @@ if (-not (Test-Path -LiteralPath $desktopExe)) { throw "DSH Desktop executable m
 
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js'
 Assert-FilePresent -Path $npmCmd -Name 'npm command'
-Assert-CommandVersion -Exe $npmCmd -Arguments @('--version') -Expected '11.17.0' -Name 'npm'
+$expectedNpmVersion = (& $npmCmd --version 2>&1 | Out-String).Trim()
+if ($LASTEXITCODE -ne 0 -or $expectedNpmVersion -notmatch '^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') {
+  throw "npm bundled by the verified Node.js MSI is not working or returned an invalid version: $expectedNpmVersion"
+}
+Write-Host "[toolchain-e2e] npm from verified Node.js MSI: $expectedNpmVersion"
 Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git for Windows'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash'
 Assert-FilePresent -Path $gitGui -Name 'Git GUI'
@@ -137,10 +141,10 @@ try {
   $nodeVersion = (& $env:ComSpec /D /C 'node --version' 2>&1 | Out-String).Trim()
   if ($nodeVersion -ne $expectedNodeVersion) { throw "fresh shell resolved wrong node: expected='$expectedNodeVersion' actual='$nodeVersion'" }
   $npmVersion = (& $env:ComSpec /D /C 'npm --version' 2>&1 | Out-String).Trim()
-  if ($npmVersion -ne '11.17.0') { throw "fresh shell resolved wrong npm: $npmVersion" }
+  if ($npmVersion -ne $expectedNpmVersion) { throw "fresh shell resolved wrong npm: expected='$expectedNpmVersion' actual='$npmVersion'" }
   $gitVersion = (& $env:ComSpec /D /C 'git --version' 2>&1 | Out-String).Trim()
   if ($gitVersion -ne $expectedGitVersion) { throw "fresh shell resolved wrong git: expected='$expectedGitVersion' actual='$gitVersion'" }
-  Write-Host '[toolchain-e2e] fresh shell resolves expected node/npm/git versions from persisted PATH'
+  Write-Host '[toolchain-e2e] fresh shell resolves the same node/npm/git delivered by the verified installers'
 } finally {
   $env:Path = $oldPath
 }
@@ -152,6 +156,7 @@ try {
 # the independently installed system toolchain survives before reinstalling DSH.
 Uninstall-Dsh -InstallDir $installDir
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js after first DSH uninstall'
+Assert-CommandVersion -Exe $npmCmd -Arguments @('--version') -Expected $expectedNpmVersion -Name 'npm after first DSH uninstall'
 Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git after first DSH uninstall'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash after first DSH uninstall'
 $pathAfterFirstUninstall = Get-PersistedPathSnapshot
@@ -195,10 +200,11 @@ try {
 Uninstall-Dsh -InstallDir $hijackInstallDir
 
 Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js after DSH uninstall'
+Assert-CommandVersion -Exe $npmCmd -Arguments @('--version') -Expected $expectedNpmVersion -Name 'npm after DSH uninstall'
 Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git after DSH uninstall'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash after DSH uninstall'
 $afterPath = Get-PersistedPathSnapshot
 if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir)) { throw 'DSH uninstall incorrectly removed the Node.js Machine PATH entry' }
 if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $gitCmdDir)) { throw 'DSH uninstall incorrectly removed the Git Machine PATH entry' }
 
-Write-Host '[toolchain-e2e] full Node.js + full Git system installation, Machine PATH, serialized PATH-hijack resistance and DSH-uninstall independence passed'
+Write-Host '[toolchain-e2e] full Node.js + npm + full Git system installation, Machine PATH, serialized PATH-hijack resistance and DSH-uninstall independence passed'
