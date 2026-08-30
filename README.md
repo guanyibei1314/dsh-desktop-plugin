@@ -9,21 +9,29 @@
 
 ## Windows x64 — v0.10.0
 
-正式 Release 完成后下载：
+**v0.10.0 已正式发布。**
 
-**[DSH Desktop v0.10.0 安装包](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.10.0/DSH-Desktop-Setup-0.10.0.exe)**
+**[下载 DSH Desktop v0.10.0 Windows 安装包](https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.10.0/DSH-Desktop-Setup-0.10.0.exe)**
 
 Release 页面：
 
 **https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.10.0**
 
-SHA-256 以 Release Notes 与：
+安装包 SHA-256：
+
+```text
+7d406533c4e1427f8b9a9056b4c0b07e9a533ad7332676b980180bfabb57a729
+```
+
+Release 同时提供：
 
 ```text
 DSH-Desktop-Setup-0.10.0.exe.sha256
+DSH-Desktop-Setup-0.10.0.exe.blockmap
+latest.yml
 ```
 
-为准。GitHub Actions artifact ZIP digest 不是安装包 EXE 的 SHA-256。
+GitHub Actions artifact ZIP digest 不是安装包 EXE 的 SHA-256；以 Release 的 `.sha256` 资产和上面的 EXE SHA-256 为准。
 
 ---
 
@@ -228,6 +236,8 @@ Standard 和 Creator 都复用这一套 Runtime，不分别下载两套 DSH。
 23. verified artifact upload
 24. Release 下载同一 artifact 后再次验证 SHA-256
 
+v0.10.0 正式 main release run #160 的 `build` 与 `publish` 均已成功。
+
 当前 DSH Desktop 社区发行路径允许 **unsigned Desktop installer**。因此 Windows 可能显示 `Unknown publisher / Windows protected your PC`。如果构建产物带有签名但签名损坏或无效，验证脚本仍会拒绝。
 
 这项策略只影响 DSH Desktop 自身发行签名；随包 Node.js / Git 官方安装器仍必须通过各自 Authenticode 与 SHA-256 验证。
@@ -286,6 +296,7 @@ v0.10.0 Creator 的 local-first 工作台方向参考了 DSH 社区中的 MIT �
 ## 开发状态 / 接手
 
 - 双模式设计：[`docs/DUAL_MODE.md`](docs/DUAL_MODE.md)
+- v0.10.0 发布证据：[`docs/RELEASE_V0.10.0.md`](docs/RELEASE_V0.10.0.md)
 - 当前交接：`HANDOFF.md`
 - 当前工程日志：`DEVELOPMENT_LOG.md`
 - 历史工程日志：`docs/history/DEVELOPMENT_LOG-v0.4-v0.8.md`
