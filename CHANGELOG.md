@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.9.2 — 2026-08-22 (release candidate)
+## 0.10.0 — 2026-08-30
+
+- 新增 **Standard / Creator 双模式**：同一个 Windows 安装包、同一个经过验证的 DSH Runtime，可在桌面菜单中切换并通过干净 relaunch 重建 Shell，避免两套 UI/侧栏状态互相污染。
+- Standard 模式完整保留原有 DSH 会话、Agent、Runtime 更新/回滚、插件市场、Skin Center、Terminal、Browser、Sites、托盘和通知。
+- 新增 Windows-first **DSH Creator** 工作台：今日推进、内容、灵感、运营、复盘、设置与备份六个核心入口，右侧继续使用同一套 DSH 会话。
+- Creator 内容坚持 local-first：用户选择真实本地内容目录；每条内容是普通文件夹；`topic.md` / `script.md` 和媒体文件是唯一正文事实源，运营状态不复制第二份正文。
+- Creator 支持真实项目创建、`topic.md` / `script.md` 编辑、内容资产阶段识别、灵感转内容、统一档期、目标追踪、人工复盘和 Creator 状态 JSON 导出。
+- Creator 状态独立保存在 Desktop `userData/creator/`；Standard / Creator 切换不会删除内容目录或运营数据。
+- Creator 文件安全边界：Root realpath、内容 ID 防 traversal、目录/编辑文件拒绝 symlink、仅允许编辑 `topic.md` / `script.md`、文本 2 MiB 上限、临时文件原子写入。
+- Creator Renderer 继续使用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`、独立 session partition、权限默认拒绝和窄化 contextBridge IPC。
+- CI 新增 Dual Mode 回归测试以及 **packaged Standard smoke + packaged Creator smoke**，两种模式都必须在正式 Windows 安装包中可启动。
+- 修复 v0.9.2 正式 Release 的实际阻塞：Git for Windows latest gate 不再依赖共享 Runner 的匿名 `api.github.com` Releases 请求，改用 Git for Windows 官方 latest-tag endpoint + 确定性 immutable Release URL；实际二进制仍由后续阶段下载并验证 pinned SHA-256 + Authenticode。
+- Node.js 官方 LTS 于 2026-08-26 更新，随包完整 Node.js 从 `24.19.0` 升级至 **`24.20.0`**；Windows x64 MSI SHA-256 固定为 `28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a`，并继续经过官方 SHASUMS + Authenticode 验证。
+- DSH Desktop 社区 Release 路径允许未签名 Desktop installer；带有损坏/无效签名的产物仍被验证脚本拒绝。随包 Node.js / Git 官方安装器的签名与 SHA-256 硬门禁不变。
+- v0.9.2 没有成功生成正式 GitHub Release；v0.10.0 在其安全加固代码基础上继续开发并作为下一正式发行版本。
+- Creator 产品方向参考 DSH 社区 MIT 项目（包括 `Jackywxsz/DSH-Creator`），但 DSH Desktop 使用自己的 Windows Creator Shell，不复用 Jacky Creator 名称、Logo、角色/IP 或单独受保护的品牌视觉资产。
+
+## 0.9.2 — 2026-08-22 (release candidate; GitHub Release 未完成)
 
 - 安全加固版本：修复提权安装器从不可信 PATH 探测/执行 Node/Git 的边界，改为仅识别 machine-owned Program Files 路径，并加入攻击复现回归。
 - 插件市场 OSV 不可用时改为 fail-closed；市场一键安装/升级绑定 **exact version + official npm Registry + exact tarball + SHA-512 integrity**，安装后再次核对 integrity，失败自动回滚。
@@ -10,10 +27,9 @@
 - Runtime 自动更新除官方 npm Registry、版本、tarball 和 SHA-512 外，强制验证 **exact `@deepseek-ai/dsh@version:integrity` npm Registry ECDSA 签名 + npm 官方 signing keys + DeepSeek 官方 immutable GitHub Release + exact tag `apps/cli/package.json` identity**；如果上游发布 provenance metadata 则记录该状态，但不再用会扫描整棵依赖树的 `npm audit signatures` 作为唯一放行路径。所有 publisher identity 校验完成前禁止执行候选 Runtime JavaScript。
 - 修复 Windows/Electron 以 Node 模式运行 pnpm 时可能在 `pnpm --ignore-scripts` 已完成落盘后返回 `0x80000003` 的清理退出码；仅当输出明确包含 pnpm `Done` 且退出码精确匹配时才允许继续进入严格 package/version/repository、lock integrity、ECDSA 与 immutable GitHub 后置校验，任一校验失败仍 fail-closed。
 - GitHub Actions 全部固定到 40 位 immutable commit SHA，新增 workflow 回归门禁、CODEOWNERS 与 Dependabot；正式 Release commit 必须关联已合并到 `main` 的 PR。
-- 正式 Windows Release 改为 fail-closed Authenticode：构建产物必须具有有效受信签名且 Publisher Subject 与仓库 secret 固定值一致；publish 下载同一 artifact 后再次验证 Authenticode 与 SHA-256。
-- Desktop 版本升级到 **0.9.2**；开发期间 DeepSeek Harness 官方 stable 再次更新，全部直接 `@deepseek-ai/dsh-*` 依赖统一对齐到 **`0.1.1-rc.2`**，`package-lock.json` 通过一次性 `--package-lock-only --ignore-scripts` workflow 受控重建并随后删除临时 workflow。
-- v0.9.1 的完整 Node.js 24.19.0 LTS + Git for Windows 2.55.0(5)、Machine PATH、Runtime GUI、junction-aware GC、Skin Center、插件市场与三轮真实安装 E2E 继续保留。
-- 本节在正式 GitHub Release 成功前保持 release candidate 状态；正式安装包 SHA-256 只以 v0.9.2 Release Notes 与 `.exe.sha256` asset 为权威。
+- v0.9.2 曾新增正式 Windows Authenticode 强制门禁，但仓库没有发布证书，正式 Release 因此未生成；后续社区发行策略改为允许 unsigned Desktop，同时保留 SHA-256 与无效签名拒绝。
+- Desktop 版本升级到 **0.9.2**；开发期间 DeepSeek Harness 官方 stable 再次更新，全部直接 `@deepseek-ai/dsh-*` 依赖统一对齐到 **`0.1.1-rc.2`**。
+- v0.9.1 的完整 Node.js + Git for Windows、Machine PATH、Runtime GUI、junction-aware GC、Skin Center、插件市场与三轮真实安装 E2E 继续保留。
 
 ## 0.9.1 — 2026-08-21
 
