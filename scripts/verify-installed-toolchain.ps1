@@ -6,6 +6,18 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
+$root = Split-Path -Parent $PSScriptRoot
+$manifestPath = Join-Path $root 'toolchain-manifest.json'
+if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw "toolchain manifest missing: $manifestPath" }
+$manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+$toolchain = $manifest.windowsX64
+if ($null -eq $toolchain) { throw 'windowsX64 toolchain definition missing' }
+$expectedNodeVersion = "v$([string]$toolchain.node.version)"
+$gitVersionParts = ([string]$toolchain.git.version).Split('.')
+if ($gitVersionParts.Count -ne 4) { throw "unexpected Git manifest version: $($toolchain.git.version)" }
+$expectedGitVersion = "git version $($gitVersionParts[0]).$($gitVersionParts[1]).$($gitVersionParts[2]).windows.$($gitVersionParts[3])"
+Write-Host "[toolchain-e2e] expected manifest versions: node=$expectedNodeVersion git=$expectedGitVersion"
+
 function Normalize-PathEntry {
   param([string]$Value)
   if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
@@ -96,10 +108,10 @@ try {
 $desktopExe = Join-Path $installDir 'DSH Desktop.exe'
 if (-not (Test-Path -LiteralPath $desktopExe)) { throw "DSH Desktop executable missing after install: $desktopExe" }
 
-Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js'
+Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js'
 Assert-FilePresent -Path $npmCmd -Name 'npm command'
 Assert-CommandVersion -Exe $npmCmd -Arguments @('--version') -Expected '11.17.0' -Name 'npm'
-Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git for Windows'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git for Windows'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash'
 Assert-FilePresent -Path $gitGui -Name 'Git GUI'
 $gitLfs = (& $gitExe lfs version 2>&1 | Out-String).Trim()
@@ -123,11 +135,11 @@ try {
   $gitResolved = (& $env:ComSpec /D /C 'where git' 2>&1 | Out-String).Trim()
   if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($gitResolved)) { throw "fresh shell cannot resolve git from persisted PATH: $gitResolved" }
   $nodeVersion = (& $env:ComSpec /D /C 'node --version' 2>&1 | Out-String).Trim()
-  if ($nodeVersion -ne 'v24.19.0') { throw "fresh shell resolved wrong node: $nodeVersion" }
+  if ($nodeVersion -ne $expectedNodeVersion) { throw "fresh shell resolved wrong node: expected='$expectedNodeVersion' actual='$nodeVersion'" }
   $npmVersion = (& $env:ComSpec /D /C 'npm --version' 2>&1 | Out-String).Trim()
   if ($npmVersion -ne '11.17.0') { throw "fresh shell resolved wrong npm: $npmVersion" }
   $gitVersion = (& $env:ComSpec /D /C 'git --version' 2>&1 | Out-String).Trim()
-  if ($gitVersion -ne 'git version 2.55.0.windows.5') { throw "fresh shell resolved wrong git: $gitVersion" }
+  if ($gitVersion -ne $expectedGitVersion) { throw "fresh shell resolved wrong git: expected='$expectedGitVersion' actual='$gitVersion'" }
   Write-Host '[toolchain-e2e] fresh shell resolves expected node/npm/git versions from persisted PATH'
 } finally {
   $env:Path = $oldPath
@@ -139,8 +151,8 @@ try {
 # uninstall registration. Uninstall the first DSH instance now and prove that
 # the independently installed system toolchain survives before reinstalling DSH.
 Uninstall-Dsh -InstallDir $installDir
-Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after first DSH uninstall'
-Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git after first DSH uninstall'
+Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js after first DSH uninstall'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git after first DSH uninstall'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash after first DSH uninstall'
 $pathAfterFirstUninstall = Get-PersistedPathSnapshot
 if (-not (Test-PathContains -PathValue $pathAfterFirstUninstall.Machine -Expected $nodeDir)) { throw 'first DSH uninstall incorrectly removed the Node.js Machine PATH entry' }
@@ -182,8 +194,8 @@ try {
 
 Uninstall-Dsh -InstallDir $hijackInstallDir
 
-Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected 'v24.19.0' -Name 'Node.js after DSH uninstall'
-Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected 'git version 2.55.0.windows.5' -Name 'Git after DSH uninstall'
+Assert-CommandVersion -Exe $nodeExe -Arguments @('--version') -Expected $expectedNodeVersion -Name 'Node.js after DSH uninstall'
+Assert-CommandVersion -Exe $gitExe -Arguments @('--version') -Expected $expectedGitVersion -Name 'Git after DSH uninstall'
 Assert-FilePresent -Path $gitBash -Name 'Git Bash after DSH uninstall'
 $afterPath = Get-PersistedPathSnapshot
 if (-not (Test-PathContains -PathValue $afterPath.Machine -Expected $nodeDir)) { throw 'DSH uninstall incorrectly removed the Node.js Machine PATH entry' }
