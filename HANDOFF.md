@@ -1,14 +1,67 @@
 # DSH Desktop 交接文档
 
 > 最后更新：2026-08-30  
-> 当前开发目标：`v0.10.0` Dual Mode  
-> 当前正式公开 Release：`v0.9.1`，`v0.9.2` 未成功生成 GitHub Release  
+> 当前正式公开 Release：`v0.10.0`  
+> 当前产品形态：Standard + Creator Dual Mode  
 > 正式发布平台：Windows x64  
 > 仓库：`guanyibei1314/dsh-desktop-plugin`
 
-## 0. 当前发布任务
+## 0. v0.10.0 已正式发布
 
-v0.10.0 通过 PR #27 开发和验证，目标是一个 Windows 安装包提供两种可切换模式：
+v0.10.0 已完成完整发布闭环，不再处于候选或待发布状态。
+
+- Feature PR：#27
+- Feature merge commit：`082bdae735b63367b2cca3c96bacffa6484575b3`
+- Release PR：#28
+- Release commit：`db298476c9164f1e47e6b1001b31416dcabcd489`
+- 正式 Windows workflow：run #160
+- build：success
+- publish：success
+- GitHub tag：`v0.10.0`
+- GitHub Release：`DSH Desktop 0.10.0`
+- Published：2026-08-30
+
+正式 Release：
+
+```text
+https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.10.0
+```
+
+正式 Windows 安装包：
+
+```text
+DSH-Desktop-Setup-0.10.0.exe
+```
+
+安装包 SHA-256：
+
+```text
+7d406533c4e1427f8b9a9056b4c0b07e9a533ad7332676b980180bfabb57a729
+```
+
+Release 资产已确认存在：
+
+```text
+DSH-Desktop-Setup-0.10.0.exe
+DSH-Desktop-Setup-0.10.0.exe.sha256
+DSH-Desktop-Setup-0.10.0.exe.blockmap
+latest.yml
+```
+
+注意：当前社区发行允许 DSH Desktop installer 自身 unsigned，所以 Windows 可能显示 `Unknown publisher / Windows protected your PC`。随包 Node.js / Git 仍必须通过官方 SHA-256 和 Authenticode signer 校验。
+
+## 1. v0.9.2 为什么没有正式上线
+
+v0.9.2 第一次被 Desktop Authenticode 强制签名门禁阻断。后来门禁改为允许 unsigned Desktop installer，但第二次发布又在 `Verify pinned full toolchain matches official latest` 失败：旧脚本通过匿名 `api.github.com` 查询 Git for Windows latest Release，在 GitHub Hosted Runner 共享出口命中 API rate limit。
+
+v0.10.0 已修复该问题：
+
+- Git latest 使用 `https://gitforwindows.org/latest-tag.txt`；
+- 使用 deterministic GitHub immutable Release asset URL；
+- `fetch-toolchain.ps1` 仍真实下载二进制；
+- SHA-256 与 Authenticode publisher 验证仍然保留。
+
+## 2. v0.10.0 Dual Mode 架构
 
 ```text
 DSH Desktop
@@ -16,48 +69,15 @@ DSH Desktop
 └── Creator
 ```
 
-Standard 保留 v0.9.x 原有 DSH Desktop。Creator 是新的 Windows-first 本地内容 / 灵感 / 运营 / 复盘工作台，但不复制第二套 DSH Runtime。
-
-正式 Release 仍必须走：
-
-```text
-PR
- -> Windows full gates
- -> merge main，release: v0.10.0 ...
- -> main 再跑同一 full gates
- -> verified artifact
- -> publish job SHA-256 re-check
- -> v0.10.0 GitHub Release
-```
-
-在 `v0.10.0` Release 页面和安装资产真实存在前，不得把“代码已合并”表述成“正式上线成功”。
-
-## 1. v0.9.2 为什么没有正式上线
-
-v0.9.2 最初被强制 Desktop Authenticode 签名门禁阻断；仓库没有配置公共发行签名证书。随后门禁改为允许 unsigned Desktop installer，并再次触发发布。
-
-第二次正式发布最终在 `Verify pinned full toolchain matches official latest` 失败：旧 `verify-official-toolchain.ps1` 使用匿名 `api.github.com` 请求 Git for Windows latest Release，在 GitHub Hosted Runner 共享出口上命中 API rate limit。
-
-因此 v0.9.2 没有生成正式 GitHub Release/tag 资产，当前对外正式版仍是 v0.9.1。
-
-v0.10.0 已修改该 live gate：
-
-- Git latest 使用 `https://gitforwindows.org/latest-tag.txt`；
-- 再由 deterministic GitHub immutable Release asset URL 固定文件；
-- 实际二进制仍由 `fetch-toolchain.ps1` 下载；
-- SHA-256 与 Authenticode publisher 验证没有删除。
-
-## 2. v0.10.0 Dual Mode 架构
-
 ### Standard
 
-入口仍为：
+入口：
 
 ```text
 bootstrap.js -> main.js
 ```
 
-保留：
+保留原有：
 
 - DSH native session / Agent；
 - Runtime GUI / auto update / rollback；
@@ -70,7 +90,7 @@ bootstrap.js -> main.js
 
 ### Creator
 
-入口为：
+入口：
 
 ```text
 bootstrap.js
@@ -79,7 +99,7 @@ bootstrap.js
  -> creator.html / creator.js / creator.css
 ```
 
-模式选择存储在 Desktop `settings.json`：
+模式选择保存在 Desktop `settings.json`：
 
 ```json
 {
@@ -87,9 +107,9 @@ bootstrap.js
 }
 ```
 
-切换模式使用 `app.relaunch()`。不在同一个 Renderer 中同时加载 Standard sidebar 与 Creator sidebar。
+切换模式使用 `app.relaunch()`，不让 Standard sidebar 与 Creator sidebar 在同一个 Renderer 中互相覆盖。
 
-Creator 当前核心：
+Creator v0.10.0 核心：
 
 - 今日推进；
 - 内容库；
@@ -100,11 +120,11 @@ Creator 当前核心：
 - Creator JSON 备份；
 - 右侧同一个 DSH 会话。
 
-Creator 第一版不依赖 Screen Studio/macOS-only 工具/自动发布，扩展能力后续单独接 Capability。
+第一版不依赖 Screen Studio、macOS-only 工具或自动发布；后续扩展作为 Capability 接入。
 
 ## 3. Creator 数据真源
 
-用户选择真实本地内容 Root。每条内容是普通文件夹：
+用户选择真实本地内容 Root，每条内容是普通目录：
 
 ```text
 Content/
@@ -118,7 +138,7 @@ Content/
 
 正文和媒体只认真实目录。
 
-Creator 自己的状态：
+Creator 自身运营状态：
 
 ```text
 <Desktop userData>/creator/
@@ -126,28 +146,19 @@ Creator 自己的状态：
 └── creator.log
 ```
 
-`state.json` 只保存：
-
-- ideas；
-- schedule；
-- goals；
-- reviews；
-- contentMeta；
-- Creator settings。
-
-不得把 `topic.md` / `script.md` 再复制一份到 state。
+`state.json` 只保存 ideas、schedule、goals、reviews、contentMeta、Creator settings，不复制 `topic.md` / `script.md`。
 
 ## 4. Creator 文件安全边界
 
-`creator-core.js` / `creator-main.js` 当前要求：
+当前要求：
 
-- Root 必须通过 realpath 且为 directory；
-- contentId 只能使用安全字符；
-- path 必须仍位于 Root 的直接子目录；
-- content directory 不允许 symlink；
+- Root 必须 realpath 且为 directory；
+- contentId 只允许安全字符；
+- path 必须留在 Root 直接子目录；
+- content directory 拒绝 symlink；
 - Editor 只允许 `topic.md` / `script.md`；
-- editor target 不允许 symlink/non-file；
-- 单个编辑文本上限 2 MiB；
+- editor target 拒绝 symlink / non-file；
+- 单个可编辑文本上限 2 MiB；
 - 写入使用 temp + rename/copy fallback；
 - IPC 要求 exact Creator renderer sender。
 
@@ -161,7 +172,7 @@ partition=persist:dsh-creator-shell
 permission request/check => deny
 ```
 
-`creator.html` 有本地 CSP，frame 只允许 loopback DSH。
+`creator.html` 使用本地 CSP，frame 只允许 loopback DSH。
 
 ## 5. Shared Runtime
 
@@ -174,9 +185,7 @@ Runtime maintenance
 bundled Web UI reconcile
 ```
 
-然后才根据 mode 进入 Standard 或 Creator。
-
-Creator 启动 DSH service 时继续使用随机 `127.0.0.1:0` 分配端口，不恢复固定 `3080` 信任。
+Creator 启动 DSH service 使用随机 `127.0.0.1:0` 端口，不恢复固定 `3080` 信任。
 
 两种模式共享：
 
@@ -211,7 +220,7 @@ Runtime update 继续要求：
 
 ## 7. Windows 工具链
 
-v0.10.0 当前：
+v0.10.0 正式发行使用：
 
 ```text
 Node.js 24.20.0 LTS x64 MSI
@@ -221,22 +230,20 @@ Git for Windows 2.55.0(5) x64 full installer
 SHA-256 d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6
 ```
 
-Node 24.20.0 是在 v0.10 CI 中由 live latest 门禁发现的上游更新，不得把 latest gate 关掉来继续使用旧 24.19.0。
-
-安装仍为 per-machine：
+安装为 per-machine：
 
 - trusted Program Files 检测；
 - 缺失时安装官方完整 Node/npm；
 - 缺失时安装官方完整 Git/Bash/GUI/LFS；
 - Machine PATH；
-- 安装完成页首次启动可立即解析；
+- fresh shell 验证；
 - DSH uninstall 不删除独立 Node/Git。
+
+Node/npm 版本验证不再硬编码 npm patch 版本；Node MSI 自身先经过 SHA-256 + OpenJS Authenticode 验证，然后 installed E2E 要求 fresh shell 解析到同一个有效 npm semver。
 
 ## 8. Desktop 签名政策
 
-当前社区发行允许 DSH Desktop installer 自身 unsigned。
-
-要求：
+当前社区发行：
 
 ```text
 NotSigned -> 允许社区 Release
@@ -244,13 +251,11 @@ Valid -> 可以继续验证已配置 Publisher
 Invalid / HashMismatch / other invalid signature -> 拒绝
 ```
 
-不能把 unsigned 说成“受信 Publisher”。Windows 可能显示 Unknown publisher / Windows protected your PC。
+不能把 unsigned 描述成受信 Publisher。
 
-这不影响随包 Node.js/Git：它们仍必须验证官方 SHA-256 + Authenticode signer。
+## 9. v0.10.0 正式 CI 实际通过项目
 
-## 9. v0.10 CI 必须通过
-
-正式 PR / Release 至少执行：
+正式 main release run #160 已通过：
 
 1. npm ci
 2. toolchain manifest checks
@@ -275,9 +280,10 @@ Invalid / HashMismatch / other invalid signature -> 拒绝
 21. package size audit
 22. EXE SHA-256
 23. artifact upload
-24. publish re-download/reverify
+24. publish re-download / Authenticode policy / SHA-256 reverify
+25. versioned GitHub Release creation
 
-任一失败都应修问题后重跑，不允许把关键步骤改为 `continue-on-error` 来上线。
+`build` 与 `publish` 均为 `success`。
 
 ## 10. 关键文件
 
@@ -298,20 +304,21 @@ scripts/test-dual-mode.js
 .github/workflows/windows-build.yml
 
 docs/DUAL_MODE.md                  dual-mode architecture
+docs/RELEASE_V0.10.0.md            v0.10.0 release evidence
 CHANGELOG.md
 README.md
 DEVELOPMENT_LOG.md
 ```
 
-## 11. 后续建议
+## 11. 下一版本建议
 
-在 v0.10.0 正式 Release 成功之后，再进入下一版本：
+v0.10.0 已经正式 Release，后续进入新版本时优先考虑：
 
 - Creator optional capabilities：字幕、封面、发布、数据同步；
 - Creator knowledge/rule/template 闭环；
-- 更完整的 Creator installed E2E，而不只 packaged smoke；
+- 更完整的 Creator installed E2E；
 - 插件 lifecycle-script 进一步收紧；
 - GitHub main ruleset 强制 PR + required Windows build + CODEOWNERS；
-- Windows 正式代码签名可作为未来发行增强，但不应阻塞当前社区版本。
+- Windows 正式代码签名可作为未来发行增强，不阻塞当前社区版本。
 
 Linux 继续不做正式发布链；macOS 暂不建立正式发行链。
