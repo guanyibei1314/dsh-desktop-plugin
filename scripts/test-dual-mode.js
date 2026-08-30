@@ -49,7 +49,7 @@ assert.ok(/Content-Security-Policy/.test(html), 'Creator local page must define 
 assert.ok(/object-src 'none'/.test(html), 'Creator CSP must disable object embedding')
 assert.ok(/frame-src http:\/\/127\.0\.0\.1:\*/.test(html), 'Creator may frame only the owned loopback DSH service')
 
-assert.strictEqual(core.sanitizeTitle('  Hello: World?  '), 'Hello  World', 'Windows-invalid title characters must be removed')
+assert.strictEqual(core.sanitizeTitle('  Hello: World?  '), 'Hello World', 'Windows-invalid title characters must be removed and whitespace normalized')
 assert.throws(() => core.sanitizeTitle('***'), /标题不能为空/, 'empty sanitized title must fail')
 assert.strictEqual(core.safeId('../escape'), '', 'path traversal ids must be rejected')
 assert.strictEqual(core.safeId('2026-08-30_project'), '2026-08-30_project')
