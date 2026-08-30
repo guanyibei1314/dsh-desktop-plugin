@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:*; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>DSH Creator</title>
+  <link rel="stylesheet" href="creator.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">D</div>
+        <div>
+          <div class="brand-title">DSH Creator</div>
+          <div class="brand-subtitle">本地创作与运营工作台</div>
+        </div>
+      </div>
+
+      <nav id="nav" class="nav">
+        <button class="nav-item active" data-view="today"><span>◫</span>今日推进</button>
+        <button class="nav-item" data-view="content"><span>▤</span>内容</button>
+        <button class="nav-item" data-view="ideas"><span>✦</span>灵感</button>
+        <button class="nav-item" data-view="operations"><span>⌁</span>运营</button>
+        <button class="nav-item" data-view="reviews"><span>↺</span>复盘</button>
+        <button class="nav-item" data-view="settings"><span>⚙</span>设置与备份</button>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div id="runtimeState" class="runtime-state"><span class="status-dot"></span>DSH 会话启动中</div>
+        <button id="switchStandard" class="secondary full">切回标准模式</button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <h1 id="viewTitle">今日推进</h1>
+          <p id="viewSubtitle">把灵感、内容、档期和复盘放在同一条工作流里。</p>
+        </div>
+        <div class="top-actions">
+          <button id="refreshAll" class="ghost">刷新</button>
+          <button id="quickIdea" class="secondary">+ 灵感</button>
+          <button id="quickContent" class="primary">+ 新建内容</button>
+        </div>
+      </header>
+
+      <section id="viewRoot" class="view-root" aria-live="polite"></section>
+    </main>
+
+    <aside id="aiPanel" class="ai-panel">
+      <div class="ai-head">
+        <div>
+          <strong>DSH 会话</strong>
+          <span>与当前工作并行</span>
+        </div>
+        <button id="toggleAi" class="icon-button" title="收起 AI 面板">›</button>
+      </div>
+      <div id="aiEmpty" class="ai-empty">
+        <div class="spinner"></div>
+        <strong>正在启动 DSH Runtime</strong>
+        <p>Creator 模式复用同一套 DSH Runtime、凭据和 Agent。</p>
+      </div>
+      <iframe id="conversationFrame" title="DSH 会话" hidden></iframe>
+    </aside>
+  </div>
+
+  <dialog id="editorDialog" class="modal">
+    <form method="dialog" class="modal-card editor-card">
+      <div class="modal-head">
+        <div>
+          <strong id="editorTitle">内容编辑</strong>
+          <span id="editorPath"></span>
+        </div>
+        <button value="cancel" class="icon-button">×</button>
+      </div>
+      <div class="editor-tabs">
+        <button type="button" class="tab active" data-editor-tab="topic">选题</button>
+        <button type="button" class="tab" data-editor-tab="script">脚本</button>
+      </div>
+      <textarea id="editorText" spellcheck="false"></textarea>
+      <div class="modal-actions">
+        <button type="button" id="openContentFolder" class="ghost">打开文件夹</button>
+        <span class="spacer"></span>
+        <button value="cancel" class="secondary">取消</button>
+        <button type="button" id="saveContent" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="formDialog" class="modal">
+    <form id="genericForm" method="dialog" class="modal-card">
+      <div class="modal-head">
+        <div>
+          <strong id="formTitle">新建</strong>
+          <span id="formHint"></span>
+        </div>
+        <button value="cancel" class="icon-button">×</button>
+      </div>
+      <div id="formFields" class="form-fields"></div>
+      <div class="modal-actions">
+        <span class="spacer"></span>
+        <button value="cancel" class="secondary">取消</button>
+        <button id="formSubmit" value="default" class="primary">保存</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <script src="creator.js"></script>
+</body>
+</html>
