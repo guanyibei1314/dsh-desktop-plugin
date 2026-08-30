@@ -1,384 +1,317 @@
 # DSH Desktop 交接文档
 
-> 最后更新：2026-08-22  
-> 当前正式版本：`v0.9.1`（`v0.9.2` 代码已合并 main，但正式 Release 被 Authenticode 门禁阻断）  
+> 最后更新：2026-08-30  
+> 当前开发目标：`v0.10.0` Dual Mode  
+> 当前正式公开 Release：`v0.9.1`，`v0.9.2` 未成功生成 GitHub Release  
 > 正式发布平台：Windows x64  
 > 仓库：`guanyibei1314/dsh-desktop-plugin`
 
-## 0. v0.9.2 Security Hardening 当前状态（2026-08-22）
+## 0. 当前发布任务
 
-`v0.9.2` 安全修复已通过 PR #14 合并到 `main`：
-
-```text
-PR #14 final head: 4a63068d89bc9798b8f2a4d989fcff6cb2eab5ae
-PR #14 merge/release commit: 71bf471421f242352cfe35df2d44e07dd175b26b
-message: release: v0.9.2
-PR Windows build #127: success
-```
-
-#127 已通过完整 Windows 发布候选门禁：Runtime exact npm Registry ECDSA + npm official signing keys + DeepSeek immutable GitHub Release/source identity、插件安全 functional/red-blue、Node/Git/Machine PATH/PATH-hijack E2E、installed Runtime、installed live market、安全预检、三轮 clean-install/cold-start/restart/uninstall、package audit、size、SHA-256 和 artifact upload。
-
-正式 main push run `32552010032` 在 Authenticode release policy 被 fail-closed：
+v0.10.0 通过 PR #27 开发和验证，目标是一个 Windows 安装包提供两种可切换模式：
 
 ```text
-DSH_REQUIRE_SIGNED_INSTALLER=true
-DSH_WINDOWS_SIGNING_SUBJECT=<empty>
-DSH-Desktop-Setup-0.9.2.exe status=NotSigned
+DSH Desktop
+├── Standard
+└── Creator
 ```
 
-因此 **v0.9.2 tag / GitHub Release 尚未生成**。当前唯一外部发布阻塞是仓库没有配置受信任的 Windows Authenticode 代码签名身份（`DSH_WINDOWS_CSC_LINK` / `DSH_WINDOWS_CSC_KEY_PASSWORD` / `DSH_WINDOWS_SIGNING_SUBJECT`）。不得通过关闭签名门禁、使用自签证书冒充受信 Publisher、或发布未签名正式版来绕过。
+Standard 保留 v0.9.x 原有 DSH Desktop。Creator 是新的 Windows-first 本地内容 / 灵感 / 运营 / 复盘工作台，但不复制第二套 DSH Runtime。
 
-在签名身份配置完成后，重新创建 `release: v0.9.2` main release trigger，正式 workflow 必须重新跑全链并在 publish job 再次验证 Authenticode + SHA-256 后才允许创建 `v0.9.2` Release。
-
-## 1. 正式发布状态
-
-v0.9.1 功能代码已经通过 PR #12 全门禁并合并 `main`。
+正式 Release 仍必须走：
 
 ```text
-PR #12 final head
-229f2d31bf6c3c215654ce8e547cd13433fdd98d
-
-PR #12 merge
-7332654a3d25e36791043c6e07970e80f75bb364
-
-release trigger
-6d8f781c25bd425097f6207c6ce3e35e39019a22
-message: release: v0.9.1
+PR
+ -> Windows full gates
+ -> merge main，release: v0.10.0 ...
+ -> main 再跑同一 full gates
+ -> verified artifact
+ -> publish job SHA-256 re-check
+ -> v0.10.0 GitHub Release
 ```
 
-正式 `v0.9.1` tag 已生成，并已用 commit compare 核对：
+在 `v0.10.0` Release 页面和安装资产真实存在前，不得把“代码已合并”表述成“正式上线成功”。
+
+## 1. v0.9.2 为什么没有正式上线
+
+v0.9.2 最初被强制 Desktop Authenticode 签名门禁阻断；仓库没有配置公共发行签名证书。随后门禁改为允许 unsigned Desktop installer，并再次触发发布。
+
+第二次正式发布最终在 `Verify pinned full toolchain matches official latest` 失败：旧 `verify-official-toolchain.ps1` 使用匿名 `api.github.com` 请求 Git for Windows latest Release，在 GitHub Hosted Runner 共享出口上命中 API rate limit。
+
+因此 v0.9.2 没有生成正式 GitHub Release/tag 资产，当前对外正式版仍是 v0.9.1。
+
+v0.10.0 已修改该 live gate：
+
+- Git latest 使用 `https://gitforwindows.org/latest-tag.txt`；
+- 再由 deterministic GitHub immutable Release asset URL 固定文件；
+- 实际二进制仍由 `fetch-toolchain.ps1` 下载；
+- SHA-256 与 Authenticode publisher 验证没有删除。
+
+## 2. v0.10.0 Dual Mode 架构
+
+### Standard
+
+入口仍为：
 
 ```text
-base: 6d8f781c25bd425097f6207c6ce3e35e39019a22
-head: v0.9.1
-status: identical
-ahead: 0
-behind: 0
+bootstrap.js -> main.js
 ```
 
-正式下载：
+保留：
+
+- DSH native session / Agent；
+- Runtime GUI / auto update / rollback；
+- plugin market；
+- Skin Center；
+- Terminal；
+- Browser；
+- Sites；
+- tray / notifications / power-save integration。
+
+### Creator
+
+入口为：
 
 ```text
-https://github.com/guanyibei1314/dsh-desktop-plugin/releases/download/v0.9.1/DSH-Desktop-Setup-0.9.1.exe
+bootstrap.js
+ -> desktop-mode.js
+ -> creator-main.js
+ -> creator.html / creator.js / creator.css
 ```
 
-Release 页面：
+模式选择存储在 Desktop `settings.json`：
+
+```json
+{
+  "desktopMode": "creator"
+}
+```
+
+切换模式使用 `app.relaunch()`。不在同一个 Renderer 中同时加载 Standard sidebar 与 Creator sidebar。
+
+Creator 当前核心：
+
+- 今日推进；
+- 内容库；
+- 灵感库；
+- 档期；
+- 目标；
+- 人工复盘；
+- Creator JSON 备份；
+- 右侧同一个 DSH 会话。
+
+Creator 第一版不依赖 Screen Studio/macOS-only 工具/自动发布，扩展能力后续单独接 Capability。
+
+## 3. Creator 数据真源
+
+用户选择真实本地内容 Root。每条内容是普通文件夹：
 
 ```text
-https://github.com/guanyibei1314/dsh-desktop-plugin/releases/tag/v0.9.1
+Content/
+└── YYYY-MM-DD_Title/
+    ├── topic.md
+    ├── script.md
+    ├── *.mp4 / *.mov
+    ├── *.srt / *.vtt
+    └── cover*.png / jpg / webp
 ```
 
-正式 EXE SHA-256 以 Release Notes 与：
+正文和媒体只认真实目录。
+
+Creator 自己的状态：
 
 ```text
-DSH-Desktop-Setup-0.9.1.exe.sha256
+<Desktop userData>/creator/
+├── state.json
+└── creator.log
 ```
 
-为唯一权威来源。不要使用 GitHub Actions artifact ZIP digest 代替 EXE SHA-256，也不要把 PR #73 候选 EXE 哈希当作正式 main Release 哈希。
+`state.json` 只保存：
 
-## 2. v0.9.1 核心：完整系统 Node.js + Git
+- ideas；
+- schedule；
+- goals；
+- reviews；
+- contentMeta；
+- Creator settings。
 
-### Node.js
+不得把 `topic.md` / `script.md` 再复制一份到 state。
 
-随安装包内嵌并在缺失时安装：
+## 4. Creator 文件安全边界
+
+`creator-core.js` / `creator-main.js` 当前要求：
+
+- Root 必须通过 realpath 且为 directory；
+- contentId 只能使用安全字符；
+- path 必须仍位于 Root 的直接子目录；
+- content directory 不允许 symlink；
+- Editor 只允许 `topic.md` / `script.md`；
+- editor target 不允许 symlink/non-file；
+- 单个编辑文本上限 2 MiB；
+- 写入使用 temp + rename/copy fallback；
+- IPC 要求 exact Creator renderer sender。
+
+Creator Window：
 
 ```text
-Node.js 24.19.0 LTS x64 MSI
-SHA-256 f0f66c2a80c08a30a5ab5179ee9ea9e45f9b46289436a8cc87ff833b852db351
-Signer: OpenJS Foundation
+contextIsolation=true
+nodeIntegration=false
+sandbox=true
+partition=persist:dsh-creator-shell
+permission request/check => deny
 ```
 
-不是 portable Node。
+`creator.html` 有本地 CSP，frame 只允许 loopback DSH。
 
-实际行为：
+## 5. Shared Runtime
 
-- 已有可用 Node -> 默认保留；
-- 缺失 -> 官方 MSI 自动安装；
-- npm 随官方 MSI 安装；
-- Node 写入 Windows Machine PATH；
-- CI fresh shell 实际执行 `node --version` / `npm --version`。
-
-### Git for Windows
-
-随安装包内嵌并在缺失时安装：
+Standard 与 Creator 都先执行：
 
 ```text
-Git for Windows 2.55.0(5) x64 full installer
-SHA-256 d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6
-Signer: Johannes Schindelin
+runtimeManager.patchDshSpawn()
+prepareRuntimeBeforeBoot()
+Runtime maintenance
+bundled Web UI reconcile
 ```
 
-不是 MinGit / PortableGit。
+然后才根据 mode 进入 Standard 或 Creator。
 
-完整安装 E2E 已验证：
+Creator 启动 DSH service 时继续使用随机 `127.0.0.1:0` 分配端口，不恢复固定 `3080` 信任。
+
+两种模式共享：
+
+- DSH managed Runtime；
+- DSH credentials/home；
+- Node/Git；
+- Runtime security；
+- plugin/runtime package infrastructure。
+
+## 6. 当前 DSH Runtime
+
+当前 direct `@deepseek-ai/dsh-*` family：
 
 ```text
-git.exe
-Git Bash
-Git GUI
-Git LFS
-Machine PATH
-fresh shell git resolution
+0.1.1-rc.2
 ```
 
-Git 使用官方安装器 `PathOption=Cmd`，只把安全 cmd wrapper 放入 Windows PATH，避免 Unix `find/sort` 抢占系统同名命令。
+Runtime update 继续要求：
 
-## 3. Node/Git 安装与卸载边界
-
-默认不覆盖已经可用的 Node/Git。
-
-CI 的：
-
-```text
-DSH_TOOLCHAIN_FORCE_INSTALL=1
-```
-
-只用于强制验证“随包完整安装器本身”能正常工作，不是普通用户默认安装策略。
-
-DSH Desktop 卸载后，CI 再次验证：
-
-- Node 仍能运行；
-- npm 仍存在；
-- Git 仍能运行；
-- Git Bash 仍存在。
-
-因此 Node/Git 是独立系统工具，不属于 DSH Desktop 卸载清理范围。
-
-## 4. Machine PATH 与首次启动
-
-Windows 安装器采用 per-machine。
-
-Node/Git 官方安装器持久化环境变量后，DSH Setup 会：
-
-1. 读取 64-bit HKLM Machine PATH；
-2. 读取 HKCU User PATH；
-3. 展开 `%SystemRoot%` 等环境引用；
-4. 更新当前 Setup 进程的 PATH；
-5. 广播 `WM_SETTINGCHANGE / Environment`。
-
-目的：安装完成页立即启动 DSH Desktop 时，第一次打开内置终端也能直接使用刚安装的 `node/npm/git`，无需注销 Windows。
-
-## 5. 工具链供应链门禁
-
-构建阶段实时要求：
-
-```text
-pinned Node == official latest LTS
-pinned Git == Git for Windows latest tag
-```
-
-并检查：
-
-- 官方固定 HTTPS URL；
-- SHA-256；
-- Authenticode；
-- 预期签名者。
-
-任一不符直接阻断发布。
-
-经过验证的完整官方安装器随后嵌入 NSIS payload，因此用户安装时不需要再联网下载 Node/Git，离线安装也可完成。
-
-## 6. DeepSeek Harness Runtime
-
-v0.9.1 bundled / verified：
-
-```text
-@deepseek-ai/dsh@0.1.1-rc.1
-```
-
-开发期间 build #68 正确发现官方 stable 已从 rc.7 更新，因此整个直接 `@deepseek-ai/dsh-*` 家族统一对齐到 `0.1.1-rc.1`，没有只升级根包形成混装 Runtime。
-
-v0.8.0 的能力继续保留：
-
-- bundled fallback；
-- managed Runtime store；
-- Runtime GUI；
-- Stable / Latest；
-- 自动/手动检查；
-- 回滚；
-- official npm source + sha512 integrity；
-- OSV fail-closed；
+- official npm Registry；
+- exact package/SemVer；
+- HTTPS tarball；
+- sha512 integrity；
+- npm Registry signature / trusted signing key；
+- expected DeepSeek GitHub repository；
+- expected immutable DSH release/source identity；
+- OSV；
 - lifecycle scripts disabled；
 - isolated real `dsh web` probe；
 - next-boot real Profile preflight；
-- junction-aware cleanup；
-- active/previous/pending protected GC。
+- activate / rollback。
 
-## 7. 发布前失败记录
+## 7. Windows 工具链
 
-这些失败必须保留，不能为了“看起来全绿”从工程日志删除。
-
-### build #68
-
-失败原因：官方 DeepSeek Harness stable 已更新。
-
-修复：整个直接 DSH 家族升级至 `0.1.1-rc.1`，并用 `npm install --package-lock-only --ignore-scripts` 受控重建 lock。
-
-### build #72
-
-失败原因：NSIS PATH refresh 首版误用了不存在的 `ReadRegExpandStr`。
-
-修复：改为：
+v0.10.0 当前：
 
 ```text
-SetRegView 64
-ReadRegStr
-ExpandEnvStrings
+Node.js 24.20.0 LTS x64 MSI
+SHA-256 28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a
+
+Git for Windows 2.55.0(5) x64 full installer
+SHA-256 d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6
 ```
 
-没有绕过 PATH 功能，也没有忽略失败。
+Node 24.20.0 是在 v0.10 CI 中由 live latest 门禁发现的上游更新，不得把 latest gate 关掉来继续使用旧 24.19.0。
 
-### build #73
+安装仍为 per-machine：
 
-最终 PR 候选：**success**。
+- trusted Program Files 检测；
+- 缺失时安装官方完整 Node/npm；
+- 缺失时安装官方完整 Git/Bash/GUI/LFS；
+- Machine PATH；
+- 安装完成页首次启动可立即解析；
+- DSH uninstall 不删除独立 Node/Git。
 
-## 8. build #73 全门禁
+## 8. Desktop 签名政策
 
-全部通过：
+当前社区发行允许 DSH Desktop installer 自身 unsigned。
 
-1. `npm ci`，0 known vulnerabilities
-2. toolchain source/hash manifest
-3. Node/Git official latest live gate
-4. JavaScript static checks
-5. Runtime updater functional
-6. Runtime updater red-blue
-7. Runtime maintenance junction + GC
-8. official DSH stable verify (`0.1.1-rc.1`)
-9. source Runtime real web activation probe
-10. plugin market functional
-11. plugin market red-blue
-12. PowerShell E2E parse
-13. Node/Git download + SHA-256 + Authenticode
-14. NSIS per-machine build
-15. packaged application smoke
-16. packaged plugin runtime + offline skins
-17. Node/npm/Git/Bash/GUI/LFS/Machine PATH installed E2E
-18. installed official Runtime update E2E
-19. installed live marketplace + security preflight
-20. 3 × clean install -> cold start -> real window -> restart -> uninstall
-21. package/runtime audit
-22. EXE SHA-256 generation
+要求：
+
+```text
+NotSigned -> 允许社区 Release
+Valid -> 可以继续验证已配置 Publisher
+Invalid / HashMismatch / other invalid signature -> 拒绝
+```
+
+不能把 unsigned 说成“受信 Publisher”。Windows 可能显示 Unknown publisher / Windows protected your PC。
+
+这不影响随包 Node.js/Git：它们仍必须验证官方 SHA-256 + Authenticode signer。
+
+## 9. v0.10 CI 必须通过
+
+正式 PR / Release 至少执行：
+
+1. npm ci
+2. toolchain manifest checks
+3. official latest Node/Git live gate
+4. static syntax
+5. security hardening + dual-mode tests
+6. Runtime functional/red-blue
+7. Runtime maintenance
+8. official DSH verify
+9. source Runtime provenance/activation probe
+10. plugin market functional/red-blue
+11. PowerShell parse
+12. full Node/Git download + hash + Authenticode
+13. NSIS build
+14. packaged Standard smoke
+15. packaged Creator smoke
+16. packaged plugin/skins
+17. installed Node/Git/Machine PATH
+18. installed Runtime update
+19. installed live marketplace/security
+20. 3x clean install/cold start/restart/uninstall
+21. package size audit
+22. EXE SHA-256
 23. artifact upload
+24. publish re-download/reverify
 
-实测：
+任一失败都应修问题后重跑，不允许把关键步骤改为 `continue-on-error` 来上线。
 
-```text
-Node v24.19.0
-npm 11.17.0
-Git 2.55.0.windows.5
-Git LFS 3.7.1
-```
-
-## 9. PR 候选体积与哈希
-
-PR #73 候选：
+## 10. 关键文件
 
 ```text
-DSH-Desktop-Setup-0.9.1.exe
-221,685,265 bytes
-211.42 MiB
-SHA-256 daa3d15781a4b7a782e79da9e0f573efaa8608614dbc6fcfd09a1fbd22378b54
+bootstrap.js                       mode-independent boot/runtime setup
+desktop-mode.js                    Standard/Creator selection + relaunch
+main.js                            Standard host
+creator-core.js                    Creator state/path pure logic
+creator-main.js                    Creator host/IPC/DSH service
+creator-preload.js                 Creator least-privilege bridge
+creator.html/js/css                Creator workspace
+
+toolchain-manifest.json            pinned full Node/Git
+build/installer.nsh                per-machine installer
+scripts/verify-official-toolchain.ps1
+scripts/fetch-toolchain.ps1
+scripts/test-dual-mode.js
+.github/workflows/windows-build.yml
+
+docs/DUAL_MODE.md                  dual-mode architecture
+CHANGELOG.md
+README.md
+DEVELOPMENT_LOG.md
 ```
 
-Actions artifact：
+## 11. 后续建议
 
-```text
-ID 9443853094
-ZIP digest sha256:c747d894777a00d92207da0d46fc7c43a9750619569e6c958195e9ebc0c78971
-```
+在 v0.10.0 正式 Release 成功之后，再进入下一版本：
 
-再次强调：ZIP digest != EXE SHA-256。
+- Creator optional capabilities：字幕、封面、发布、数据同步；
+- Creator knowledge/rule/template 闭环；
+- 更完整的 Creator installed E2E，而不只 packaged smoke；
+- 插件 lifecycle-script 进一步收紧；
+- GitHub main ruleset 强制 PR + required Windows build + CODEOWNERS；
+- Windows 正式代码签名可作为未来发行增强，但不应阻塞当前社区版本。
 
-正式 main build 会产生自己的已验证 artifact，所以正式 Release 哈希只认 Release `.sha256`。
-
-## 10. 体积门禁
-
-完整 Node/Git 使旧 125 MiB 产品范围不再成立，但体积门禁没有取消。
-
-```text
-hard cap: 230 MiB
-baseline: 130,173,608 bytes
-max growth: 110 MiB
-```
-
-PR #73 实际 211.42 MiB，通过硬上限。
-
-## 11. 发布流程
-
-```text
-feature branch
- -> PR
- -> Windows full gates
- -> merge main
- -> `release: vX.Y.Z`
- -> main 再跑同一 full gates
- -> EXE/.sha256/blockmap/latest.yml artifact
- -> publish 下载同一 artifact
- -> sha256sum -c
- -> gh release create/edit
-```
-
-publish 不重新构建第二份未经测试的 EXE。
-
-## 12. 安全边界
-
-能阻断/降低：
-
-- 错误 Node/Git 官方版本；
-- 非预期 URL；
-- SHA-256 不匹配；
-- Authenticode/签名者异常；
-- 安装失败；
-- Machine PATH 缺失；
-- fresh shell 无法解析工具链；
-- Runtime integrity/profile preflight 问题；
-- junction 删除越界；
-- 已覆盖的插件市场已知风险。
-
-不能证明：
-
-- 没有 zero-day；
-- 所有 transitive dependency 绝对安全；
-- 普通第三方 JS 一定没有恶意逻辑；
-- 上游维护者账号未来不会被攻陷。
-
-禁止写“100% 安全”“绝对安全”。
-
-## 13. 当前日志与关键文件
-
-```text
-DEVELOPMENT_LOG.md                         v0.9.x 当前工程日志
-docs/history/DEVELOPMENT_LOG-v0.4-v0.8.md 历史工程日志
-CHANGELOG.md                               用户可读版本变化
-README.md                                  下载/使用/验证说明
-
-build/installer.nsh                       Node/Git 安装 + PATH refresh
-scripts/toolchain-manifest.json           pinned toolchain
-scripts/fetch-toolchain.ps1               下载/hash/signature
-scripts/verify-official-toolchain.ps1     live latest gate
-scripts/verify-installed-toolchain.ps1    完整安装/Machine PATH E2E
-.github/workflows/windows-build.yml        全门禁 + Release
-runtime-manager.js                         managed Runtime
-runtime-control.js                         Runtime GUI/maintenance
-plugin-market.js / plugin-security.js      marketplace/security
-```
-
-## 14. 下一步
-
-### P0 — 首次启动 / API Key 小白向导
-
-尚未完成。实现前先核对官方 DSH 当前凭据/Profile 存储语义；不要把 DeepSeek API Key 内置进公开安装包或日志。
-
-### P2 — 供应链纵深防御
-
-尚未完成：
-
-- dependency-tree OSV/npm audit；
-- npm provenance/signature；
-- tarball/source static scan；
-- richer plugin permissions/sandbox manifest；
-- Runtime behavior monitoring/quarantine。
-
-### 平台
-
-Windows x64 是正式目标。Linux 仍不做；macOS 正式发布链未建立。
+Linux 继续不做正式发布链；macOS 暂不建立正式发行链。
