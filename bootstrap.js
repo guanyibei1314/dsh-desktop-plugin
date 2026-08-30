@@ -3,10 +3,11 @@
 const { app } = require('electron')
 const runtimeManager = require('./runtime-manager')
 const runtimeControl = require('./runtime-control')
+const desktopMode = require('./desktop-mode')
 
-// Redirect every desktop-owned DSH CLI spawn (main service, plugin manager and
-// bundled skin reconciliation) through one validated runtime selected for this
-// process. Non-DSH child processes are left untouched.
+// Redirect every desktop-owned DSH CLI spawn (main service, Creator service,
+// plugin manager and bundled skin reconciliation) through one validated runtime
+// selected for this process. Non-DSH child processes are left untouched.
 runtimeManager.patchDshSpawn()
 
 const RUNTIME_UPDATE_SMOKE = process.argv.includes('--runtime-update-smoke')
@@ -17,8 +18,9 @@ if (!RUNTIME_UPDATE_SMOKE) {
   const desktopExtensions = require('./desktop-extensions')
   const { registerPluginMarketIpc } = require('./plugin-market-ipc')
 
-  // Register the Runtime settings menu first. Desktop extensions wrap the same
-  // menu builder afterwards; both patches preserve the local-only IPC boundary.
+  // Patch mode first. Runtime settings and desktop extensions wrap the same
+  // Menu builder afterwards, so Standard and Creator receive one coherent menu.
+  desktopMode.registerDesktopMode()
   registerRuntimeSettings()
   desktopExtensions.registerDesktopExtensions()
   registerPluginMarketIpc()
@@ -41,20 +43,19 @@ async function boot() {
   }
 
   const { ensureBundledWebUi } = require('./bundled-web-ui')
-  // The skin bundle is physically shipped inside the installer. Reconcile it
-  // into the private web profile before DSH starts. The DSH CLI spawn itself is
-  // transparently routed through the currently selected managed runtime.
+  // Shared bundled web UI remains reconciled for both modes. Creator does not
+  // replace the DSH Runtime; it adds a separate local-first shell around it.
   if (!SMOKE) {
     try {
       await ensureBundledWebUi()
     } catch (err) {
-      // Appearance must never make the desktop unusable. The bootstrap module
-      // writes diagnostics and the normal DSH UI still starts on failure.
       console.error('[bundled-web-ui]', err && err.stack ? err.stack : err)
     }
   }
 
-  require('./main.js')
+  if (desktopMode.getMode() === desktopMode.MODE_CREATOR) require('./creator-main.js')
+  else require('./main.js')
+
   if (!SMOKE) runtimeControl.startAutoUpdates()
 }
 
