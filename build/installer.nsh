@@ -1,7 +1,7 @@
 !include "LogicLib.nsh"
 !include "WinMessages.nsh"
 
-!define DSH_NODE_INSTALLER "node-v24.19.0-x64.msi"
+!define DSH_NODE_INSTALLER "node-v24.20.0-x64.msi"
 !define DSH_GIT_INSTALLER "Git-2.55.0.5-64-bit.exe"
 
 !macro customInstall
@@ -32,7 +32,7 @@
   ${EndIf}
 
   ${If} "$8" == "1"
-    DetailPrint "Installing full Node.js LTS 24.19.0 and registering Windows PATH..."
+    DetailPrint "Installing full Node.js LTS 24.20.0 and registering Windows PATH..."
     ; Use the official MSI default feature selection: Node runtime, npm/core
     ; components and PATH integration. Do not force ADDLOCAL=ALL because the
     ; optional native-module build-tools flow can pull in Python/Visual Studio.
