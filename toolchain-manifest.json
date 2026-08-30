@@ -2,11 +2,11 @@
   "schema": 1,
   "windowsX64": {
     "node": {
-      "version": "24.19.0",
+      "version": "24.20.0",
       "kind": "msi",
-      "file": "node-v24.19.0-x64.msi",
-      "url": "https://nodejs.org/download/release/v24.19.0/node-v24.19.0-x64.msi",
-      "sha256": "f0f66c2a80c08a30a5ab5179ee9ea9e45f9b46289436a8cc87ff833b852db351"
+      "file": "node-v24.20.0-x64.msi",
+      "url": "https://nodejs.org/download/release/v24.20.0/node-v24.20.0-x64.msi",
+      "sha256": "28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a"
     },
     "git": {
       "version": "2.55.0.5",
