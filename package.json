@@ -134,7 +134,7 @@
     "pnpm": "11.17.0"
   },
   "devDependencies": {
-    "electron": "^43.4.0",
+    "electron": "^44.1.0",
     "electron-builder": "^26.15.3"
   }
 }
