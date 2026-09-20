@@ -223,8 +223,8 @@ Runtime update 继续要求：
 v0.10.0 正式发行使用：
 
 ```text
-Node.js 24.20.0 LTS x64 MSI
-SHA-256 28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a
+Node.js 24.21.0 LTS x64 MSI
+SHA-256 bb0eaee134f9357f22aea915ee793343e627aefc1e66488164bac6915bce2cac
 
 Git for Windows 2.55.0(5) x64 full installer
 SHA-256 d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6

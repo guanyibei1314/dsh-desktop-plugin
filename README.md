@@ -137,7 +137,7 @@ Creator Window 使用独立 Session partition、`contextIsolation: true`、`node
 Windows 安装包继续内嵌并在系统缺失时安装官方完整工具链：
 
 ```text
-Node.js 24.20.0 LTS x64 MSI
+Node.js 24.21.0 LTS x64 MSI
 Git for Windows 2.55.0(5) x64 full installer
 ```
 
