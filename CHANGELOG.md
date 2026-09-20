@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Hardened Creator navigation and preload isolation: Creator now accepts only its exact local page URL and no longer exposes its IPC bridge after an arbitrary local-file navigation or redirect.
+- Updated the pinned full Node.js Windows installer from 24.20.0 to the official 24.21.0 LTS release, including the official x64 MSI SHA-256, so the live toolchain gate remains reproducible.
 
 ## 0.10.0 — 2026-08-30
 
@@ -16,7 +17,7 @@
 - Creator Renderer 继续使用 `contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`、独立 session partition、权限默认拒绝和窄化 contextBridge IPC。
 - CI 新增 Dual Mode 回归测试以及 **packaged Standard smoke + packaged Creator smoke**，两种模式都必须在正式 Windows 安装包中可启动。
 - 修复 v0.9.2 正式 Release 的实际阻塞：Git for Windows latest gate 不再依赖共享 Runner 的匿名 `api.github.com` Releases 请求，改用 Git for Windows 官方 latest-tag endpoint + 确定性 immutable Release URL；实际二进制仍由后续阶段下载并验证 pinned SHA-256 + Authenticode。
-- Node.js 官方 LTS 于 2026-08-26 更新，随包完整 Node.js 从 `24.19.0` 升级至 **`24.20.0`**；Windows x64 MSI SHA-256 固定为 `28b69132c35ccc033bf8f2a67cd10c9d75ef5822593363309da448f2afff2d8a`，并继续经过官方 SHASUMS + Authenticode 验证。
+- Node.js 官方 LTS 于 2026-09 更新，随包完整 Node.js 从 `24.20.0` 升级至 **`24.21.0`**；Windows x64 MSI SHA-256 固定为 `bb0eaee134f9357f22aea915ee793343e627aefc1e66488164bac6915bce2cac`，并继续经过官方 SHASUMS + Authenticode 验证。
 - DSH Desktop 社区 Release 路径允许未签名 Desktop installer；带有损坏/无效签名的产物仍被验证脚本拒绝。随包 Node.js / Git 官方安装器的签名与 SHA-256 硬门禁不变。
 - v0.9.2 没有成功生成正式 GitHub Release；v0.10.0 在其安全加固代码基础上继续开发并作为下一正式发行版本。
 - Creator 产品方向参考 DSH 社区 MIT 项目（包括 `Jackywxsz/DSH-Creator`），但 DSH Desktop 使用自己的 Windows Creator Shell，不复用 Jacky Creator 名称、Logo、角色/IP 或单独受保护的品牌视觉资产。
