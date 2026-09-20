@@ -4,6 +4,7 @@
 
 - Hardened Creator navigation and preload isolation: Creator now accepts only its exact local page URL and no longer exposes its IPC bridge after an arbitrary local-file navigation or redirect.
 - Updated the pinned full Node.js Windows installer from 24.20.0 to the official 24.21.0 LTS release, including the official x64 MSI SHA-256, so the live toolchain gate remains reproducible.
+- Added an optional TypeSafe Creator idea assessment: typed priority/angle/evidence judgments stay in the Electron main process, use bounded retries and response validation, and never auto-promote content.
 
 ## 0.10.0 — 2026-08-30
 

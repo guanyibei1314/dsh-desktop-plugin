@@ -28,6 +28,7 @@ const {
   writeTextAtomic,
 } = require('./creator-core')
 const desktopMode = require('./desktop-mode')
+const typesafe = require('./creator-typesafe')
 
 const CREATOR_HTML = path.join(__dirname, 'creator.html')
 const CREATOR_PRELOAD = path.join(__dirname, 'creator-preload.js')
@@ -324,6 +325,18 @@ function writeContent(id, field, text) {
   return readContent(id)
 }
 
+async function assessIdea(id) {
+  const safe = safeId(id)
+  if (!safe) throw new Error('灵感 ID 无效。')
+  const state = readState()
+  const idea = state.ideas.find((item) => item.id === safe)
+  if (!idea) throw new Error('灵感不存在或已被删除。')
+  return {
+    ideaId: idea.id,
+    assessment: await typesafe.assessIdea(idea),
+  }
+}
+
 async function pickLibrary() {
   const result = await dialog.showOpenDialog(creatorWindow, {
     title: '选择 Creator 内容目录',
@@ -385,6 +398,10 @@ function registerIpc() {
   ipcMain.handle('creator:library:create', (event, payload) => {
     requireCreatorSender(event)
     return createContent(payload && payload.title, payload && payload.sourceIdeaId)
+  })
+  ipcMain.handle('creator:idea:assess', async (event, id) => {
+    requireCreatorSender(event)
+    return assessIdea(String(id || ''))
   })
   ipcMain.handle('creator:content:get', (event, id) => {
     requireCreatorSender(event)

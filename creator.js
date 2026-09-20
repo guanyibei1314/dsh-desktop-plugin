@@ -36,6 +36,7 @@ let editing = null
 let editingTab = 'topic'
 let formHandler = null
 let toastTimer = null
+let ideaAssessments = new Map()
 
 const viewCopy = {
   today: ['今日推进', '把灵感、内容、档期和目标汇总成今天真正要做的事。'],
@@ -296,6 +297,55 @@ function renderIdeas() {
   root.append(grid)
 }
 
+function assessmentKind(key) {
+  if (key === 'promote') return 'good'
+  if (key === 'gather_evidence' || key === 'review') return 'warn'
+  return 'muted'
+}
+
+function priorityLabel(level) {
+  if (level === 'high') return '高'
+  if (level === 'medium') return '中'
+  return '低'
+}
+
+function renderIdeaAssessment(idea) {
+  const cached = ideaAssessments.get(idea.id)
+  if (!cached || cached.updatedAt !== idea.updatedAt) return null
+  const assessment = cached.assessment
+  const wrap = node('div', 'idea-assessment')
+  const head = node('div', 'idea-assessment-head')
+  head.append(
+    badge(assessment.recommendation.label, assessmentKind(assessment.recommendation.key)),
+    node('span', 'muted small', '优先级 ' + priorityLabel(assessment.priority.level) + ' · 置信度 ' + Math.round(assessment.priority.confidence * 100) + '%'),
+  )
+  const details = node('div', 'idea-assessment-details')
+  details.append(
+    node('span', '', '角度：' + assessment.angle.label),
+    node('span', '', '依据：' + Math.round(assessment.evidence.noul * 100) + '%'),
+    node('span', '', '评估于 ' + formatDate(assessment.evaluatedAt)),
+  )
+  wrap.append(head, details, node('p', 'idea-assessment-reason', assessment.recommendation.reason))
+  return wrap
+}
+
+async function assessIdea(idea) {
+  const cached = ideaAssessments.get(idea.id)
+  if (cached && cached.updatedAt === idea.updatedAt) {
+    render()
+    return
+  }
+  try {
+    toast('TypeSafe 正在评估这条灵感…')
+    const result = await bridge.assessIdea(idea.id)
+    ideaAssessments.set(idea.id, { updatedAt: idea.updatedAt, assessment: result.assessment })
+    render()
+    toast('TypeSafe 评估已完成')
+  } catch (error) {
+    toast(error && error.message ? error.message : String(error), true)
+  }
+}
+
 function ideaPanel(title, items, actionable) {
   const panel = node('div', 'panel')
   const head = node('div', 'panel-pad')
@@ -304,16 +354,23 @@ function ideaPanel(title, items, actionable) {
   const list = node('div', 'list')
   if (!items.length) list.append(emptyState(actionable ? '灵感池是空的' : '还没有升级记录', actionable ? '看到任何值得做的东西先记下来。' : '从左侧灵感池点击“转为内容”。'))
   for (const idea of items) {
-    const row = node('div', 'list-row')
+    const row = node('div', 'list-row idea-row')
     const main = node('div', 'row-main')
     main.append(node('div', 'row-title', idea.title), node('div', 'row-meta', `${idea.type} · ${idea.tier}${idea.tags.length ? ` · ${idea.tags.join(' / ')}` : ''}`))
     const actions = node('div', 'row-actions')
     if (actionable) {
-      actions.append(button('编辑', 'ghost', () => openIdeaForm(idea)), button('转为内容', 'secondary', () => promoteIdea(idea)))
+      const cached = ideaAssessments.get(idea.id)
+      actions.append(
+        button(cached && cached.updatedAt === idea.updatedAt ? '重新评估' : 'TypeSafe 评估', 'ghost', () => assessIdea(idea)),
+        button('编辑', 'ghost', () => openIdeaForm(idea)),
+        button('转为内容', 'secondary', () => promoteIdea(idea)),
+      )
     } else if (idea.contentId) {
       actions.append(button('打开内容', 'ghost', () => openEditor(idea.contentId)))
     }
     row.append(main, actions)
+    const assessment = renderIdeaAssessment(idea)
+    if (assessment) row.append(assessment)
     list.append(row)
   }
   panel.append(list)

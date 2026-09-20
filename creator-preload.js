@@ -33,6 +33,7 @@ if (isExactCreatorPage()) {
     pickLibrary: () => ipcRenderer.invoke('creator:library:pick'),
     listContents: () => ipcRenderer.invoke('creator:library:list'),
     createContent: (title, sourceIdeaId = '') => ipcRenderer.invoke('creator:library:create', { title, sourceIdeaId }),
+    assessIdea: (id) => ipcRenderer.invoke('creator:idea:assess', id),
     getContent: (id) => ipcRenderer.invoke('creator:content:get', id),
     writeContent: (id, field, text) => ipcRenderer.invoke('creator:content:write', { id, field, text }),
     openContent: (id) => ipcRenderer.invoke('creator:content:open', id),
