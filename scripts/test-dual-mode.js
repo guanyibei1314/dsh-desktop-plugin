@@ -15,7 +15,7 @@ const html = read('creator.html')
 const pkg = JSON.parse(read('package.json'))
 
 assert.strictEqual(pkg.version, '0.10.0', 'dual-mode release must be versioned as 0.10.0')
-for (const file of ['desktop-mode.js', 'creator-core.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
+for (const file of ['desktop-mode.js', 'creator-core.js', 'creator-typesafe.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
   assert.ok(pkg.build.files.includes(file), `${file} must be packaged`)
 }
 assert.ok(pkg.scripts['smoke:creator'], 'Creator mode must have an explicit smoke entrypoint')
@@ -41,11 +41,15 @@ assert.ok(host.includes("resolveEditableFile(root, id, 'topic.md')"), 'topic edi
 assert.ok(host.includes("resolveEditableFile(root, id, 'script.md')"), 'script editor must use allowlisted path validation')
 assert.ok(host.includes('entry.isSymbolicLink()'), 'Creator catalog must refuse symlink content directories')
 assert.ok(host.includes("partition: 'persist:dsh-creator-shell'"), 'Creator shell must have a dedicated session partition')
+assert.ok(host.includes("require('./creator-typesafe')"), 'TypeSafe client must stay in the Creator main process')
+assert.ok(host.includes("ipcMain.handle('creator:idea:assess'"), 'TypeSafe assessment IPC must be registered')
 assert.ok(host.includes("const { pathToFileURL } = require('url')"), 'Creator navigation policy must use canonical file URLs')
 assert.ok(host.includes("creatorWindow.webContents.on('will-redirect', enforceCreatorPage)"), 'Creator redirects must use the same exact-page policy')
 assert.ok(!host.includes("!url.startsWith('file:')"), 'Creator must not allow arbitrary local file navigation')
 
 assert.ok(preload.includes("contextBridge.exposeInMainWorld('creatorBridge'"), 'Creator must use a narrow contextBridge API')
+assert.ok(preload.includes("creator:idea:assess"), 'Creator preload must expose only the typed TypeSafe assessment action')
+assert.ok(!preload.includes('TYPESAFE_API_KEY'), 'TypeSafe credentials must not reach the preload')
 assert.ok(preload.includes('isExactCreatorPage'), 'Creator preload must expose IPC only on the exact local page')
 assert.ok(!preload.includes("require('path')"), 'sandboxed Creator preload must not require the Node path module')
 assert.ok(!preload.includes("exposeInMainWorld('ipcRenderer'"), 'raw ipcRenderer must never be exposed')

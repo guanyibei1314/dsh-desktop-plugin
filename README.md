@@ -83,6 +83,8 @@ Creator 是 v0.10.0 新增的 Windows-first 本地创作与运营工作台。
 
 Creator 第一版不强依赖 Screen Studio、macOS-only 工具或自动社交平台发布。后续扩展可以作为 Capability 接入，而不会让 Windows 核心工作台依赖某个外部软件。
 
+Creator 灵感池还提供可选的 **TypeSafe typed assessment**：并行评估执行优先级、内容角度和具体依据，再把结果组合成需要人工确认的建议。API Key 只在 Electron 主进程读取，未配置时 Creator 仍可离线使用。配置与边界见 [`docs/TYPESAFE_CREATOR.md`](docs/TYPESAFE_CREATOR.md)。
+
 完整架构见 [`docs/DUAL_MODE.md`](docs/DUAL_MODE.md)。
 
 ---
