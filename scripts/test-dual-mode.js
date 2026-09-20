@@ -47,6 +47,7 @@ assert.ok(!host.includes("!url.startsWith('file:')"), 'Creator must not allow ar
 
 assert.ok(preload.includes("contextBridge.exposeInMainWorld('creatorBridge'"), 'Creator must use a narrow contextBridge API')
 assert.ok(preload.includes('isExactCreatorPage'), 'Creator preload must expose IPC only on the exact local page')
+assert.ok(!preload.includes("require('path')"), 'sandboxed Creator preload must not require the Node path module')
 assert.ok(!preload.includes("exposeInMainWorld('ipcRenderer'"), 'raw ipcRenderer must never be exposed')
 assert.ok(!preload.includes('sendSync('), 'Creator preload must not expose synchronous arbitrary IPC')
 assert.ok(/Content-Security-Policy/.test(html), 'Creator local page must define a CSP')

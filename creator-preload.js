@@ -1,10 +1,14 @@
 'use strict'
 
 const { contextBridge, ipcRenderer } = require('electron')
-const path = require('path')
 const { pathToFileURL } = require('url')
 
-const CREATOR_PAGE_URL = pathToFileURL(path.join(__dirname, 'creator.html')).href
+function appFileUrl(fileName) {
+  const sep = process.platform === 'win32' ? '\\' : '/'
+  return pathToFileURL(__dirname + sep + fileName).href
+}
+
+const CREATOR_PAGE_URL = appFileUrl('creator.html')
 
 function isExactCreatorPage() {
   try {
