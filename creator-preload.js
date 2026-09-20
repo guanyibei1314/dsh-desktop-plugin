@@ -1,6 +1,18 @@
 'use strict'
 
 const { contextBridge, ipcRenderer } = require('electron')
+const path = require('path')
+const { pathToFileURL } = require('url')
+
+const CREATOR_PAGE_URL = pathToFileURL(path.join(__dirname, 'creator.html')).href
+
+function isExactCreatorPage() {
+  try {
+    return location.href === CREATOR_PAGE_URL
+  } catch (_) {
+    return false
+  }
+}
 
 function subscribe(channel, callback) {
   if (typeof callback !== 'function') return () => {}
@@ -9,19 +21,21 @@ function subscribe(channel, callback) {
   return () => ipcRenderer.removeListener(channel, listener)
 }
 
-contextBridge.exposeInMainWorld('creatorBridge', {
-  status: () => ipcRenderer.invoke('creator:status'),
-  state: () => ipcRenderer.invoke('creator:state:get'),
-  saveState: (state) => ipcRenderer.invoke('creator:state:save', state),
-  pickLibrary: () => ipcRenderer.invoke('creator:library:pick'),
-  listContents: () => ipcRenderer.invoke('creator:library:list'),
-  createContent: (title, sourceIdeaId = '') => ipcRenderer.invoke('creator:library:create', { title, sourceIdeaId }),
-  getContent: (id) => ipcRenderer.invoke('creator:content:get', id),
-  writeContent: (id, field, text) => ipcRenderer.invoke('creator:content:write', { id, field, text }),
-  openContent: (id) => ipcRenderer.invoke('creator:content:open', id),
-  openLibrary: () => ipcRenderer.invoke('creator:library:open'),
-  exportBackup: () => ipcRenderer.invoke('creator:backup:export'),
-  switchMode: (mode) => ipcRenderer.invoke('creator:switch-mode', mode),
-  onHarnessUrl: (callback) => subscribe('creator:harness-url', callback),
-  onCommand: (callback) => subscribe('creator:command', callback),
-})
+if (isExactCreatorPage()) {
+  contextBridge.exposeInMainWorld('creatorBridge', {
+    status: () => ipcRenderer.invoke('creator:status'),
+    state: () => ipcRenderer.invoke('creator:state:get'),
+    saveState: (state) => ipcRenderer.invoke('creator:state:save', state),
+    pickLibrary: () => ipcRenderer.invoke('creator:library:pick'),
+    listContents: () => ipcRenderer.invoke('creator:library:list'),
+    createContent: (title, sourceIdeaId = '') => ipcRenderer.invoke('creator:library:create', { title, sourceIdeaId }),
+    getContent: (id) => ipcRenderer.invoke('creator:content:get', id),
+    writeContent: (id, field, text) => ipcRenderer.invoke('creator:content:write', { id, field, text }),
+    openContent: (id) => ipcRenderer.invoke('creator:content:open', id),
+    openLibrary: () => ipcRenderer.invoke('creator:library:open'),
+    exportBackup: () => ipcRenderer.invoke('creator:backup:export'),
+    switchMode: (mode) => ipcRenderer.invoke('creator:switch-mode', mode),
+    onHarnessUrl: (callback) => subscribe('creator:harness-url', callback),
+    onCommand: (callback) => subscribe('creator:command', callback),
+  })
+}

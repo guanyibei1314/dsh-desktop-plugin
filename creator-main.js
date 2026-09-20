@@ -14,6 +14,7 @@ const fs = require('fs')
 const path = require('path')
 const net = require('net')
 const { spawn } = require('child_process')
+const { pathToFileURL } = require('url')
 const {
   canonicalRoot,
   defaultState,
@@ -31,6 +32,7 @@ const desktopMode = require('./desktop-mode')
 const CREATOR_HTML = path.join(__dirname, 'creator.html')
 const CREATOR_PRELOAD = path.join(__dirname, 'creator-preload.js')
 const ICON = path.join(__dirname, 'assets', 'icon.png')
+const CREATOR_PAGE_URL = pathToFileURL(CREATOR_HTML).href
 const SMOKE = process.argv.includes('--smoke')
 const MAX_CONTENT_ITEMS = 2000
 const VIDEO_EXTS = new Set(['.mp4', '.mov', '.mkv', '.webm'])
@@ -491,10 +493,11 @@ function createCreatorWindow() {
   const session = creatorWindow.webContents.session
   session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
   session.setPermissionCheckHandler(() => false)
-  creatorWindow.webContents.on('will-navigate', (event, url) => {
-    const local = new URL(`file://${CREATOR_HTML.replace(/\\/g, '/')}`).href
-    if (url !== local && !url.startsWith('file:')) event.preventDefault()
-  })
+  const enforceCreatorPage = (event, url) => {
+    if (url !== CREATOR_PAGE_URL) event.preventDefault()
+  }
+  creatorWindow.webContents.on('will-navigate', enforceCreatorPage)
+  creatorWindow.webContents.on('will-redirect', enforceCreatorPage)
   creatorWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {})
     return { action: 'deny' }

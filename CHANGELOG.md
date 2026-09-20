@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Hardened Creator navigation and preload isolation: Creator now accepts only its exact local page URL and no longer exposes its IPC bridge after an arbitrary local-file navigation or redirect.
+
 ## 0.10.0 — 2026-08-30
 
 - 新增 **Standard / Creator 双模式**：同一个 Windows 安装包、同一个经过验证的 DSH Runtime，可在桌面菜单中切换并通过干净 relaunch 重建 Shell，避免两套 UI/侧栏状态互相污染。

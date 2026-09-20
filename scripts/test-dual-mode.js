@@ -41,8 +41,12 @@ assert.ok(host.includes("resolveEditableFile(root, id, 'topic.md')"), 'topic edi
 assert.ok(host.includes("resolveEditableFile(root, id, 'script.md')"), 'script editor must use allowlisted path validation')
 assert.ok(host.includes('entry.isSymbolicLink()'), 'Creator catalog must refuse symlink content directories')
 assert.ok(host.includes("partition: 'persist:dsh-creator-shell'"), 'Creator shell must have a dedicated session partition')
+assert.ok(host.includes("const { pathToFileURL } = require('url')"), 'Creator navigation policy must use canonical file URLs')
+assert.ok(host.includes("creatorWindow.webContents.on('will-redirect', enforceCreatorPage)"), 'Creator redirects must use the same exact-page policy')
+assert.ok(!host.includes("!url.startsWith('file:')"), 'Creator must not allow arbitrary local file navigation')
 
 assert.ok(preload.includes("contextBridge.exposeInMainWorld('creatorBridge'"), 'Creator must use a narrow contextBridge API')
+assert.ok(preload.includes('isExactCreatorPage'), 'Creator preload must expose IPC only on the exact local page')
 assert.ok(!preload.includes("exposeInMainWorld('ipcRenderer'"), 'raw ipcRenderer must never be exposed')
 assert.ok(!preload.includes('sendSync('), 'Creator preload must not expose synchronous arbitrary IPC')
 assert.ok(/Content-Security-Policy/.test(html), 'Creator local page must define a CSP')
