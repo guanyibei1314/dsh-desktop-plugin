@@ -24,6 +24,7 @@ const {
   shouldCheck,
 } = require('./runtime-update-core')
 const { readJsonLimited } = require('./secure-fetch')
+const desktopSettings = require('./desktop-settings')
 const {
   REGISTRY_KEYS_URL,
   officialReleaseApiUrl,
@@ -120,10 +121,6 @@ function logFile() {
   return path.join(runtimeRoot(), 'runtime-update.log')
 }
 
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
 function ensureDirs() {
   fs.mkdirSync(runtimeRoot(), { recursive: true })
   fs.mkdirSync(versionsDir(), { recursive: true })
@@ -185,7 +182,7 @@ function saveState(state) {
 }
 
 function updateSettings() {
-  const settings = readJson(settingsFile()) || {}
+  const settings = desktopSettings.readSettings()
   const envChannel = process.env.DSH_RUNTIME_CHANNEL
   const channel = envChannel === 'latest' || settings.dshRuntimeUpdateChannel === 'latest' ? 'latest' : 'stable'
   const autoFromEnv = process.env.DSH_RUNTIME_AUTO_UPDATE

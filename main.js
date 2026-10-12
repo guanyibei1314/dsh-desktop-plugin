@@ -25,6 +25,7 @@ const { pathToFileURL } = require('url')
 const { readJsonLimited } = require('./secure-fetch')
 const lifecycle = require('./desktop-lifecycle')
 const bootSplash = require('./boot-splash')
+const desktopSettings = require('./desktop-settings')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
@@ -65,22 +66,13 @@ const MAX_RPC_BYTES = 4 * 1024 * 1024
 const MAX_SSE_BUFFER_BYTES = 1024 * 1024
 
 // ---------------------------------------------------------------- local settings (zero-config: all optional, defaults work out of the box)
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
 function loadSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))
-  } catch (err) {
-    return {}
-  }
+  return desktopSettings.readSettings()
 }
 
 function saveSettings(patch) {
   try {
-    const next = Object.assign(loadSettings(), patch)
-    fs.writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
+    desktopSettings.updateSettings(patch)
   } catch (err) {
     // settings persistence is best-effort
   }
@@ -788,9 +780,25 @@ function createWindow() {
   loadMain()
 }
 
+const BOUNDS_SAVE_DELAY_MS = 500
+let boundsTimer = null
+let pendingBounds = null
+
 function rememberBounds() {
   if (win === null || win.isDestroyed() || win.isMinimized() || win.isMaximized()) return
-  saveSettings({ windowBounds: win.getBounds() })
+  // move/resize fire continuously while dragging; persist once they settle.
+  pendingBounds = win.getBounds()
+  if (boundsTimer !== null) clearTimeout(boundsTimer)
+  boundsTimer = setTimeout(flushBounds, BOUNDS_SAVE_DELAY_MS)
+}
+
+function flushBounds() {
+  if (boundsTimer !== null) clearTimeout(boundsTimer)
+  boundsTimer = null
+  if (pendingBounds === null) return
+  const bounds = pendingBounds
+  pendingBounds = null
+  saveSettings({ windowBounds: bounds })
 }
 
 // ---------------------------------------------------------------- send-message dialog
@@ -1017,6 +1025,7 @@ if (!app.hasSingleInstanceLock()) {
   // Runs on before-quit and before a mode-switch/restart relaunch.
   lifecycle.onShutdown(() => {
     quitting = true
+    flushBounds()
     if (sseTimer) clearTimeout(sseTimer)
     if (menuRebuildTimer) clearTimeout(menuRebuildTimer)
     stopBundledDsh()

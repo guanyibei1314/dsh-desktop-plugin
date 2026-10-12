@@ -1,42 +1,13 @@
 'use strict'
 
-const { app, Menu } = require('electron')
-const fs = require('fs')
-const path = require('path')
+const { Menu } = require('electron')
+const desktopSettings = require('./desktop-settings')
 const lifecycle = require('./desktop-lifecycle')
 
 const MODE_STANDARD = 'standard'
 const MODE_CREATOR = 'creator'
 const MODES = new Set([MODE_STANDARD, MODE_CREATOR])
 let registered = false
-
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
-function readSettings() {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
-  } catch (_) {
-    return {}
-  }
-}
-
-function writeSettings(patch) {
-  const file = settingsFile()
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  const next = Object.assign({}, readSettings(), patch)
-  const temp = `${file}.tmp-${process.pid}-${Date.now()}`
-  fs.writeFileSync(temp, JSON.stringify(next, null, 2), 'utf8')
-  try {
-    fs.renameSync(temp, file)
-  } catch (error) {
-    fs.copyFileSync(temp, file)
-    fs.rmSync(temp, { force: true })
-  }
-  return next
-}
 
 function cliMode() {
   if (process.argv.includes('--creator-mode')) return MODE_CREATOR
@@ -52,14 +23,14 @@ function getMode() {
   if (MODES.has(forced)) return forced
   const fromCli = cliMode()
   if (fromCli) return fromCli
-  const saved = String(readSettings().desktopMode || '').trim().toLowerCase()
+  const saved = String(desktopSettings.readSettings().desktopMode || '').trim().toLowerCase()
   return MODES.has(saved) ? saved : MODE_STANDARD
 }
 
 function setMode(mode) {
   const normalized = String(mode || '').trim().toLowerCase()
   if (!MODES.has(normalized)) throw new Error(`unsupported desktop mode: ${mode}`)
-  writeSettings({ desktopMode: normalized })
+  desktopSettings.updateSettings({ desktopMode: normalized })
   return normalized
 }
 

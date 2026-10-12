@@ -1,23 +1,15 @@
 'use strict'
 
-const { app } = require('electron')
 const fs = require('fs')
 const path = require('path')
 const runtimeManager = require('./runtime-manager')
+const desktopSettings = require('./desktop-settings')
 
 const AUTO_TICK_MS = 60 * 60 * 1000
 const INITIAL_AUTO_TICK_MS = 6000
 const SMOKE_PROFILE_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 let autoTimer = null
-
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
-function readJson(file, fallback = null) {
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')) } catch (err) { return fallback }
-}
 
 function writeJsonAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -42,7 +34,7 @@ function appendMaintenanceLog(message) {
 }
 
 function storedSettings() {
-  const raw = readJson(settingsFile(), {}) || {}
+  const raw = desktopSettings.readSettings()
   return {
     channel: raw.dshRuntimeUpdateChannel === 'latest' ? 'latest' : 'stable',
     autoUpdate: raw.dshRuntimeAutoUpdate !== false,
@@ -69,16 +61,16 @@ function effectiveSettings() {
 }
 
 function saveSettings(patch) {
-  const raw = readJson(settingsFile(), {}) || {}
+  const updates = {}
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'channel')) {
     if (patch.channel !== 'stable' && patch.channel !== 'latest') throw new Error('Runtime 更新通道仅支持 stable/latest。')
-    raw.dshRuntimeUpdateChannel = patch.channel
+    updates.dshRuntimeUpdateChannel = patch.channel
   }
   if (patch && Object.prototype.hasOwnProperty.call(patch, 'autoUpdate')) {
     if (typeof patch.autoUpdate !== 'boolean') throw new Error('自动更新开关必须是布尔值。')
-    raw.dshRuntimeAutoUpdate = patch.autoUpdate
+    updates.dshRuntimeAutoUpdate = patch.autoUpdate
   }
-  writeJsonAtomic(settingsFile(), raw)
+  const raw = desktopSettings.updateSettings(updates)
   rescheduleAutoUpdates()
   appendMaintenanceLog(`settings saved channel=${raw.dshRuntimeUpdateChannel || 'stable'} auto=${raw.dshRuntimeAutoUpdate !== false}`)
   return getStatus()
