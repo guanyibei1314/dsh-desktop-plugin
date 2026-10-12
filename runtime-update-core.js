@@ -5,6 +5,13 @@ const REGISTRY_ORIGIN = 'https://registry.npmjs.org'
 const REGISTRY_URL = `${REGISTRY_ORIGIN}/@deepseek-ai%2Fdsh`
 const OSV_URL = 'https://api.osv.dev/v1/query'
 const EXPECTED_REPOSITORY = 'https://github.com/deepseek-ai/deepseek-harness'
+// DSH 0.1.2 added launch-token/cookie authentication to `dsh web` (every
+// request without the cookie gets 401) and 0.2 replaced the HTTP RPC/event
+// endpoints Desktop drives. This Desktop build integrates the pre-auth Runtime
+// only, so newer official releases are reported as unsupported instead of being
+// downloaded every day and failing the activation probe.
+const FIRST_UNSUPPORTED_DSH_VERSION = '0.1.2-0'
+const FIRST_PARTY_PACKAGE = /^@deepseek-ai\/[a-z0-9][a-z0-9._-]*$/
 const SLSA_PROVENANCE_PREDICATES = new Set([
   'https://slsa.dev/provenance/v0.2',
   'https://slsa.dev/provenance/v1',
@@ -50,6 +57,11 @@ function compareVersions(a, b) {
     if (left[key] !== right[key]) return left[key] < right[key] ? -1 : 1
   }
   return comparePrerelease(left.pre, right.pre)
+}
+
+/** True when this Desktop build can drive the given official DSH version. */
+function isSupportedRuntimeVersion(version) {
+  return isSafeVersion(version) && compareVersions(version, FIRST_UNSUPPORTED_DSH_VERSION) < 0
 }
 
 function isHttpsRegistryTarball(value) {
@@ -119,7 +131,13 @@ function selectRegistryTag(metadata, channel = 'stable') {
 }
 
 function normalizeRegistryRelease(metadata, channel = 'stable') {
-  const version = selectRegistryTag(metadata, channel)
+  return normalizeRegistryVersion(metadata, selectRegistryTag(metadata, channel))
+}
+
+/** Validate one exact published version from the official registry metadata. */
+function normalizeRegistryVersion(metadata, version) {
+  if (!metadata || metadata.name !== PACKAGE_NAME) throw new Error('registry metadata package mismatch')
+  if (!isSafeVersion(version)) throw new Error('registry version is invalid')
   const versions = metadata && typeof metadata.versions === 'object' && metadata.versions ? metadata.versions : {}
   const pkg = versions[version]
   if (!pkg || pkg.name !== PACKAGE_NAME || pkg.version !== version) throw new Error('registry version metadata mismatch')
@@ -148,6 +166,75 @@ function normalizeRegistryRelease(metadata, channel = 'stable') {
   }
 }
 
+/**
+ * Release gate: the bundled DSH must be the newest official release this
+ * Desktop build supports. A newer npm latest that needs the new web auth/API is
+ * reported, not required, until Desktop integrates it.
+ */
+function evaluateBundledRuntime(metadata, bundledVersion) {
+  const latest = normalizeRegistryRelease(metadata, 'stable')
+  const bundled = normalizeRegistryVersion(metadata, bundledVersion)
+  if (!isSupportedRuntimeVersion(bundled.version)) {
+    throw new Error(`bundled ${PACKAGE_NAME}=${bundled.version} is not supported by this Desktop build`)
+  }
+  if (latest.version === bundled.version) return { status: 'current', latest, bundled }
+  if (isSupportedRuntimeVersion(latest.version)) {
+    throw new Error(`bundled ${PACKAGE_NAME}=${bundled.version} but official latest=${latest.version} is supported by this Desktop build`)
+  }
+  return { status: 'latest-unsupported', latest, bundled }
+}
+
+/**
+ * pnpm-workspace.yaml that pins first-party packages to exact versions. DSH
+ * declares its family with caret ranges, so an unpinned install resolves newer
+ * first-party packages than the ones tested (e.g. cordis 4.0.4 instead of
+ * 4.0.1, which the bundled DSH cannot boot with).
+ */
+function firstPartyOverridesYaml(pins) {
+  const entries = Object.entries(pins || {})
+    .filter(([name, version]) => FIRST_PARTY_PACKAGE.test(name) && isSafeVersion(version))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  if (entries.length === 0) throw new Error('no valid first-party pins')
+  return `overrides:\n${entries.map(([name, version]) => `  ${JSON.stringify(name)}: ${JSON.stringify(version)}`).join('\n')}\n`
+}
+
+/** pnpm os/cpu constraint check (`[linux]`, `['!win32']`); no constraint matches. */
+function lockConstraintMatches(list, value) {
+  if (list === undefined) return true
+  const items = list.split(',').map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+  if (items.includes(`!${value}`)) return false
+  const allowed = items.filter((item) => !item.startsWith('!'))
+  return allowed.length === 0 || allowed.includes(value)
+}
+
+/**
+ * First-party packages a pnpm v9 lockfile resolved differently from the pins.
+ * A first-party package without a pin (a peer pnpm auto-installs) must belong
+ * to the release itself, i.e. carry the release version. Platform packages for
+ * another os/cpu (e.g. linux landlock addons on Windows) are never installed
+ * here, so the shipped tree cannot pin them and they are skipped.
+ */
+function lockedFirstPartyDrift(lockText, pins, releaseVersion, target = { platform: process.platform, arch: process.arch }) {
+  const afterPackages = String(lockText || '').split(/^packages:[ \t]*$/m)[1]
+  if (afterPackages === undefined) return ['pnpm lock has no packages section']
+  const packages = afterPackages.split(/^\S/m)[0]
+  const drift = []
+  let seen = 0
+  for (const entry of packages.split(/\n(?= {2}\S)/)) {
+    const key = entry.match(/^\s*'?(@deepseek-ai\/[a-z0-9._-]+)@([^'(:\s]+)'?:/)
+    if (!key) continue
+    const [, name, version] = key
+    const os = (entry.match(/^ {4}os: \[(.*)\]\s*$/m) || [])[1]
+    const cpu = (entry.match(/^ {4}cpu: \[(.*)\]\s*$/m) || [])[1]
+    if (!lockConstraintMatches(os, target.platform) || !lockConstraintMatches(cpu, target.arch)) continue
+    seen += 1
+    const pinned = Object.prototype.hasOwnProperty.call(pins, name) ? pins[name] : releaseVersion
+    if (version !== pinned) drift.push(`${name}@${version} (expected ${pinned})`)
+  }
+  if (seen === 0) drift.push('pnpm lock lists no first-party packages')
+  return drift
+}
+
 function normalizeOsvResponse(body) {
   const vulns = body && Array.isArray(body.vulns) ? body.vulns : []
   const ids = []
@@ -174,19 +261,25 @@ function shouldCheck(lastCheckedAt, now = Date.now(), intervalMs = 24 * 60 * 60 
 
 module.exports = {
   EXPECTED_REPOSITORY,
+  FIRST_UNSUPPORTED_DSH_VERSION,
   PACKAGE_NAME,
   REGISTRY_ORIGIN,
   REGISTRY_URL,
   OSV_URL,
   SLSA_PROVENANCE_PREDICATES,
   compareVersions,
+  evaluateBundledRuntime,
+  firstPartyOverridesYaml,
   isDshBinArgument,
   isHttpsRegistryTarball,
   isSafeVersion,
+  isSupportedRuntimeVersion,
+  lockedFirstPartyDrift,
   normalizeAttestations,
   normalizeOsvResponse,
   normalizeRegistryRelease,
   normalizeRegistrySignatures,
+  normalizeRegistryVersion,
   normalizeRepository,
   parseVersion,
   selectRegistryTag,

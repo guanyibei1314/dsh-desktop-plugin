@@ -18,9 +18,9 @@ The Node.js MSI is not modified by DSH Desktop. The v0.9.1 build downloads it fr
 
 - Project: Git for Windows
 - Bundled installer: official full Windows x64 installer (not MinGit and not PortableGit)
-- Bundled version: `2.55.0(5)` / upstream tag `v2.55.0.windows.5`
+- Bundled version: `2.56.0(2)` / upstream tag `v2.56.0.windows.2`
 - Upstream: `https://gitforwindows.org/`
-- Source/release: `https://github.com/git-for-windows/git/releases/tag/v2.55.0.windows.5`
+- Source/release: `https://github.com/git-for-windows/git/releases/tag/v2.56.0.windows.2`
 - License: Git is GPL-2.0; Git for Windows also distributes Bash, OpenSSL, OpenSSH, Git LFS, Git Credential Manager and other components under their respective upstream licenses.
 - Purpose in DSH Desktop: install the complete normal Git for Windows experience, including Git Bash/GUI and standard command-line integration, for users who do not already have a usable Git command on `PATH`.
 

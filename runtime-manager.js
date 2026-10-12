@@ -12,10 +12,14 @@ const {
   REGISTRY_URL,
   OSV_URL,
   compareVersions,
+  firstPartyOverridesYaml,
   isDshBinArgument,
   isSafeVersion,
+  isSupportedRuntimeVersion,
+  lockedFirstPartyDrift,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRegistryVersion,
   normalizeRepository,
   shouldCheck,
 } = require('./runtime-update-core')
@@ -65,6 +69,17 @@ function bundledDshVersion() {
   } catch (err) {
     return '0.0.0'
   }
+}
+
+/** Exact @deepseek-ai/* versions Desktop ships (npm hoists the whole family). */
+function bundledFirstPartyPins() {
+  const scopeDir = physicalNodeModulePath('@deepseek-ai')
+  const pins = {}
+  for (const entry of fs.readdirSync(scopeDir)) {
+    const pkg = readJson(path.join(scopeDir, entry, 'package.json'))
+    if (pkg && pkg.name === `@deepseek-ai/${entry}` && isSafeVersion(pkg.version)) pins[pkg.name] = pkg.version
+  }
+  return pins
 }
 
 function pnpmBinPath() {
@@ -388,12 +403,15 @@ async function fetchJson(url, options, maxBytes) {
   return readJsonLimited(response, maxBytes, { label: 'Runtime security response' })
 }
 
-async function fetchOfficialRelease(channel) {
-  const metadata = await fetchJson(REGISTRY_URL, {
+async function fetchRegistryMetadata() {
+  return fetchJson(REGISTRY_URL, {
     method: 'GET',
     headers: { accept: 'application/json', 'user-agent': 'DSH-Desktop-Runtime-Updater/0.7' },
   }, MAX_REGISTRY_BYTES)
-  return normalizeRegistryRelease(metadata, channel)
+}
+
+async function fetchOfficialRelease(channel) {
+  return normalizeRegistryRelease(await fetchRegistryMetadata(), channel)
 }
 
 async function queryOsv(version) {
@@ -510,6 +528,10 @@ async function installOfficialVersion(release, options = {}) {
     private: true,
     version: '0.0.0',
   }, null, 2), 'utf8')
+  // Reinstalling the bundled Runtime must reproduce the first-party family
+  // Desktop ships; caret ranges would otherwise pull untested newer packages.
+  const pins = release.version === bundledDshVersion() ? bundledFirstPartyPins() : null
+  if (pins) fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), firstPartyOverridesYaml(pins), 'utf8')
 
   const pnpm = pnpmBinPath()
   if (!fs.existsSync(pnpm)) throw new Error('bundled pnpm is missing')
@@ -545,6 +567,11 @@ async function installOfficialVersion(release, options = {}) {
   if (!lock.includes(release.integrity)) {
     fs.rmSync(root, { recursive: true, force: true })
     throw new Error('pnpm lock integrity does not match official registry metadata')
+  }
+  const drift = pins ? lockedFirstPartyDrift(lock, pins, release.version) : []
+  if (drift.length > 0) {
+    fs.rmSync(root, { recursive: true, force: true })
+    throw new Error(`managed runtime resolved untested first-party versions: ${drift.slice(0, 5).join(', ')}`)
   }
 
   // Authenticity must be independently verified before candidate JavaScript is
@@ -660,6 +687,13 @@ async function checkAndStageUpdate(options = {}) {
         appendLog(`no update: current=${current} latest=${release.version}`)
         return { status: 'current', current, latest: release.version }
       }
+      if (!isSupportedRuntimeVersion(release.version)) {
+        // Downloading it would only fail the activation probe (401) every day.
+        state.lastError = null
+        saveState(state)
+        appendLog(`official ${release.version} requires a newer DSH Desktop (web auth/API); staying on ${current}`)
+        return { status: 'unsupported', current, latest: release.version }
+      }
       if (!options.forceVersion && state.blockedVersions[release.version]) {
         return { status: 'blocked', current, latest: release.version, reason: state.blockedVersions[release.version].reason }
       }
@@ -716,7 +750,15 @@ function scheduleAutoUpdate() {
 async function runUpdaterSmoke() {
   ensureDirs()
   appendLog('runtime updater smoke started')
-  const release = await fetchOfficialRelease('stable')
+  // Exercise the full download/verify/install/probe/activate chain on the
+  // newest official release this build supports: npm latest when supported,
+  // otherwise the bundled version (itself an official published release).
+  const metadata = await fetchRegistryMetadata()
+  const latest = normalizeRegistryRelease(metadata, 'stable')
+  const release = isSupportedRuntimeVersion(latest.version)
+    ? latest
+    : normalizeRegistryVersion(metadata, bundledDshVersion())
+  if (release !== latest) appendLog(`runtime updater smoke: official latest ${latest.version} is unsupported; using bundled official ${release.version}`)
   const vulns = await queryOsv(release.version)
   if (vulns.length > 0) throw new Error(`official DSH ${release.version} has OSV findings: ${vulns.join(', ')}`)
   const installed = await installOfficialVersion(release, { forceReinstall: true })

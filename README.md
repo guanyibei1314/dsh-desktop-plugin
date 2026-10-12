@@ -140,7 +140,7 @@ Windows 安装包继续内嵌并在系统缺失时安装官方完整工具链：
 
 ```text
 Node.js 24.21.0 LTS x64 MSI
-Git for Windows 2.55.0(5) x64 full installer
+Git for Windows 2.56.0(2) x64 full installer
 ```
 
 不是 portable Node，也不是 MinGit。
@@ -168,6 +168,14 @@ Desktop 当前 bundled / verified DSH family：
 ```text
 @deepseek-ai/dsh@0.1.1-rc.2
 ```
+
+**DSH 版本兼容边界**：DSH 从 0.1.2 起给 `dsh web` 加了启动 token / cookie 登录（不带 cookie 的请求一律 401），0.2 又替换了 Desktop 使用的 HTTP RPC 与事件接口。当前 Desktop 只对接 0.1.2 之前的 Runtime（`FIRST_UNSUPPORTED_DSH_VERSION = 0.1.2-0`）：
+
+- 自动更新遇到更新的官方版本时报告 `unsupported`，不下载、不探测，继续使用当前 Runtime；
+- 发布门禁要求内置版本是“Desktop 支持的最新官方版本”，npm latest 不受支持时只输出提示；
+- 对接新版 DSH 需要单独的集成工作（登录、接口、Creator 面板、探针与 E2E）。
+
+DSH 用 `^` 范围声明自己的依赖。重新安装内置版本时（例如 runtime-update smoke），Desktop 会用 `pnpm-workspace.yaml` 的 `overrides` 把所有 `@deepseek-ai/*` 包固定到安装包里实际随附的版本，安装后再逐个核对 `pnpm-lock.yaml`，出现未测试过的第一方版本即失败并删除。否则 caret 范围会解析出更新的 `cordis` 等包（例如 `cordis@4.0.4`），内置 DSH 0.1.1-rc.2 用它们无法启动。第三方传递依赖仍按范围解析，不在这次固定之内。
 
 Runtime 更新链继续执行：
 
