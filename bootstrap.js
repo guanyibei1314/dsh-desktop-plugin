@@ -13,7 +13,14 @@ runtimeManager.patchDshSpawn()
 const RUNTIME_UPDATE_SMOKE = process.argv.includes('--runtime-update-smoke')
 const SMOKE = process.argv.includes('--smoke')
 
-if (!RUNTIME_UPDATE_SMOKE) {
+// Claim the single-instance lock before any boot work, for both modes. A second
+// launch must not preflight a pending Runtime against the live Profile, garbage
+// collect managed versions or run pnpm in the shared web profile while the
+// primary instance is still using them. The runtime update smoke is an isolated
+// CI probe with its own runtime root and keeps no lock.
+const PRIMARY_INSTANCE = RUNTIME_UPDATE_SMOKE || app.requestSingleInstanceLock()
+
+if (PRIMARY_INSTANCE && !RUNTIME_UPDATE_SMOKE) {
   const { registerRuntimeSettings } = require('./runtime-settings-window')
   const desktopExtensions = require('./desktop-extensions')
   const { registerPluginMarketIpc } = require('./plugin-market-ipc')
@@ -70,7 +77,10 @@ async function runtimeUpdateSmoke() {
   }
 }
 
-if (RUNTIME_UPDATE_SMOKE) {
+if (!PRIMARY_INSTANCE) {
+  // The primary instance receives `second-instance` and shows its window.
+  app.quit()
+} else if (RUNTIME_UPDATE_SMOKE) {
   if (app.isReady()) runtimeUpdateSmoke()
   else app.whenReady().then(runtimeUpdateSmoke)
 } else if (app.isReady()) boot()

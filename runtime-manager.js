@@ -353,7 +353,8 @@ async function probeDshBin(bin, home, timeoutMs = PROBE_TIMEOUT_MS) {
   const port = await pickPort()
   const child = originalSpawn(
     process.execPath,
-    ['--expose-internals', bin, 'web', '--host', '127.0.0.1', '--port', String(port)],
+    // --no-open: a probe must never hand its short-lived URL to the system browser.
+    ['--expose-internals', bin, 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'],
     { cwd: home, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env },
   )
   let output = ''

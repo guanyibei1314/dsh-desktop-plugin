@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Fixed `dsh web` opening the system browser: Standard, Creator and the Runtime update/preflight probe now launch DSH with `--no-open`.
+- Fixed Creator rejecting Chinese and other Unicode titles: content folders may use any title text; separators, drive/stream colons, wildcard/quote and control/bidi/zero-width characters, trailing dots/spaces and Windows reserved device names are still rejected, and existing Unicode folders are now listed.
+- Fixed the Standard error page's 5-second retry racing a slow Runtime cold start (both attempts failed and one DSH process was orphaned): concurrent starts and page loads now share one in-flight attempt.
+- Fixed mode switch, Runtime restart and plugin restart orphaning child processes: `app.exit()` skips `before-quit`, so owned DSH/Creator Runtimes, the PTY and plugin operations are now stopped through a shared shutdown hook before relaunch.
+- The single-instance lock is now claimed in `bootstrap.js` before any Runtime preflight, version cleanup or profile reconciliation, and covers Creator mode, which previously had no lock; a second launch focuses the existing window.
+- Added `npm run test:behavior` (run in CI): Electron-free behavior tests that load the real main-process modules with stubbed process boundaries.
 - Hardened Creator navigation and preload isolation: Creator now accepts only its exact local page URL and no longer exposes its IPC bridge after an arbitrary local-file navigation or redirect.
 - Updated the pinned full Node.js Windows installer from 24.20.0 to the official 24.21.0 LTS release, including the official x64 MSI SHA-256, so the live toolchain gate remains reproducible.
 - Added an optional TypeSafe Creator idea assessment: typed priority/angle/evidence judgments stay in the Electron main process, use bounded retries and response validation, and never auto-promote content.

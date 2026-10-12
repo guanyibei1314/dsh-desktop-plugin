@@ -23,6 +23,7 @@ const net = require('net')
 const { spawn } = require('child_process')
 const { pathToFileURL } = require('url')
 const { readJsonLimited } = require('./secure-fetch')
+const lifecycle = require('./desktop-lifecycle')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
@@ -35,6 +36,7 @@ const SMOKE = process.argv.includes('--smoke')
 // 默认模式只信任 Desktop 自己启动并持有进程句柄的随机 loopback Runtime。
 // 复用外部服务必须由用户显式提供 DSH_URL / --url；固定 3080 不再自动信任。
 let dshProc = null
+let dshStarting = null
 let activeUrl = EXPLICIT_HARNESS_URL
 
 const ASSETS = path.join(__dirname, 'assets')
@@ -175,9 +177,20 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。 */
-async function startBundledDsh() {
-  if (dshProc !== null && activeUrl) return activeUrl
+/**
+ * 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。
+ * 错误页每 5 秒自动重试；冷启动期间的并发调用必须共享同一次启动，
+ * 否则后一次会顶替 dshProc，两次都失败且前一个子进程成为孤儿。
+ */
+function startBundledDsh() {
+  if (dshProc !== null && activeUrl) return Promise.resolve(activeUrl)
+  if (dshStarting === null) {
+    dshStarting = launchBundledDsh().finally(() => { dshStarting = null })
+  }
+  return dshStarting
+}
+
+async function launchBundledDsh() {
   if (!hasBundledDsh()) throw new Error('内置 DeepSeek Harness 缺失（node_modules/@deepseek-ai/dsh）')
   const port = await pickPort()
   const home = dshHomeDir()
@@ -185,7 +198,8 @@ async function startBundledDsh() {
   const captured = []
   const child = spawn(
     process.execPath,
-    ['--expose-internals', dshBinPath(), 'web', '--host', '127.0.0.1', '--port', String(port)],
+    // --no-open: `dsh web` otherwise hands the URL to the system browser.
+    ['--expose-internals', dshBinPath(), 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'],
     {
       cwd: home,
       windowsHide: true,
@@ -216,7 +230,9 @@ async function startBundledDsh() {
     }
     await delay(1000)
   }
-  stopBundledDsh()
+  // Only stop the child this launch owns; a child that already exited or was
+  // stopped by quit/relaunch has released dshProc itself.
+  if (dshProc === child) stopBundledDsh()
   throw new Error('内置 DeepSeek Harness 启动超时：' + captured.join('').slice(-2000))
 }
 
@@ -631,8 +647,18 @@ function rebuildMenu() {
 }
 
 // ---------------------------------------------------------------- window
-async function loadMain() {
-  if (!win) return
+let loadingMain = null
+
+/** Load the DSH client; a retry while a load is in flight joins that load. */
+function loadMain() {
+  if (!win) return Promise.resolve()
+  if (loadingMain === null) {
+    loadingMain = loadMainOnce().finally(() => { loadingMain = null })
+  }
+  return loadingMain
+}
+
+async function loadMainOnce() {
   let url = activeUrl || EXPLICIT_HARNESS_URL
   try {
     url = await ensureHarness()
@@ -644,7 +670,8 @@ async function loadMain() {
     loadErrorPage()
     return
   }
-  win.loadURL(url).catch(() => loadErrorPage())
+  if (!win) return
+  await win.loadURL(url).catch(() => loadErrorPage())
 }
 
 function loadErrorPage() {
@@ -983,8 +1010,8 @@ ipcMain.on('desktop:retry', (event) => { if (isTrustedSender(event)) loadMain() 
 ipcMain.on('desktop:quit', (event) => { if (isTrustedSender(event)) { quitting = true; app.quit() } })
 
 // ---------------------------------------------------------------- lifecycle
-const gotLock = app.requestSingleInstanceLock()
-if (!gotLock) {
+// bootstrap.js claims the single-instance lock before any boot work.
+if (!app.hasSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => showWindow())
@@ -1007,7 +1034,8 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => { /* stay alive in tray (Windows) */ })
-  app.on('before-quit', () => {
+  // Runs on before-quit and before a mode-switch/restart relaunch.
+  lifecycle.onShutdown(() => {
     quitting = true
     if (sseTimer) clearTimeout(sseTimer)
     if (menuRebuildTimer) clearTimeout(menuRebuildTimer)

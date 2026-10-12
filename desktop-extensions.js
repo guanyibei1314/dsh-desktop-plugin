@@ -15,6 +15,7 @@ const fs = require('fs')
 const path = require('path')
 const { spawn } = require('child_process')
 const { pathToFileURL } = require('url')
+const lifecycle = require('./desktop-lifecycle')
 
 const ASSETS = path.join(__dirname, 'assets')
 const ICON = path.join(ASSETS, 'icon.png')
@@ -626,8 +627,7 @@ function registerIpc() {
   })
   ipcMain.handle('plugin:restart', (event) => {
     if (!pluginWindow || event.sender !== pluginWindow.webContents) throw new Error('unauthorized sender')
-    app.relaunch()
-    app.exit(0)
+    lifecycle.relaunch()
     return true
   })
   ipcMain.handle('plugin:status', (event) => {
@@ -695,7 +695,8 @@ function registerDesktopExtensions() {
   registered = true
   patchMenus()
   registerIpc()
-  app.on('before-quit', () => {
+  // Runs on before-quit and before a mode-switch/restart relaunch.
+  lifecycle.onShutdown(() => {
     if (pluginProcess) terminateTree(pluginProcess)
     for (const siteWin of siteWindows.values()) {
       try { if (!siteWin.isDestroyed()) siteWin.destroy() } catch (err) { /* ignore */ }

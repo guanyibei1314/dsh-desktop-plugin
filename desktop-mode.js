@@ -3,6 +3,7 @@
 const { app, Menu } = require('electron')
 const fs = require('fs')
 const path = require('path')
+const lifecycle = require('./desktop-lifecycle')
 
 const MODE_STANDARD = 'standard'
 const MODE_CREATOR = 'creator'
@@ -68,8 +69,8 @@ function switchMode(mode) {
     // getMode() now reads the persisted value; callers may still request an
     // explicit reload to rebuild the DSH shell, so relaunch intentionally.
   }
-  app.relaunch({ args: process.argv.slice(1).filter((arg) => !/^--(?:creator|standard)-mode$|^--desktop-mode=/.test(arg)) })
-  app.exit(0)
+  // Stops the owned DSH Runtime/PTY first: app.exit() skips before-quit.
+  lifecycle.relaunch({ args: process.argv.slice(1).filter((arg) => !/^--(?:creator|standard)-mode$|^--desktop-mode=/.test(arg)) })
 }
 
 function modeSubmenu() {
