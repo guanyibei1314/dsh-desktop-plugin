@@ -242,6 +242,7 @@ function getStatus() {
       lastError: state.lastError,
       blockedVersions: state.blockedVersions || {},
       heldVersion: state.heldVersion || null,
+      retryAt: state.retryAt || null,
     },
     rollbackTarget,
     managedVersions,

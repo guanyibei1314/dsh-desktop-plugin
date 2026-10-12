@@ -40,6 +40,11 @@ const MAX_REGISTRY_BYTES = 6 * 1024 * 1024
 const MAX_OSV_BYTES = 2 * 1024 * 1024
 const PROBE_TIMEOUT_MS = 90000
 const STATE_SCHEMA = 1
+// Rate limits (anonymous api.github.com allows 60 requests/hour per IP), network
+// errors and 5xx are transient: retry soon instead of waiting a full day.
+const TRANSIENT_RETRY_MIN_MS = 15 * 60 * 1000
+const TRANSIENT_RETRY_DEFAULT_MS = 60 * 60 * 1000
+const TRANSIENT_RETRY_MAX_MS = 6 * 60 * 60 * 1000
 const originalSpawn = childProcess.spawn.bind(childProcess)
 
 let spawnPatched = false
@@ -152,6 +157,8 @@ function defaultState() {
     blockedVersions: {},
     // Version the user rolled back from; automatic checks never re-stage it.
     heldVersion: null,
+    // After a transient failure, the next automatic check runs at this time.
+    retryAt: null,
   }
 }
 
@@ -165,6 +172,7 @@ function loadState() {
   for (const key of ['activeVersion', 'previousVersion', 'pendingVersion', 'latestVersion', 'heldVersion']) {
     if (state[key] !== null && !isSafeVersion(state[key])) state[key] = null
   }
+  if (state.retryAt !== null && !Number.isFinite(Date.parse(state.retryAt))) state.retryAt = null
   return state
 }
 
@@ -395,11 +403,39 @@ async function probeDshBin(bin, home, timeoutMs = PROBE_TIMEOUT_MS) {
   }
 }
 
+function transientError(message, retryAfterMs = TRANSIENT_RETRY_DEFAULT_MS) {
+  const error = new Error(message)
+  error.transient = true
+  const delay = Number.isFinite(retryAfterMs) ? retryAfterMs : TRANSIENT_RETRY_DEFAULT_MS
+  error.retryAfterMs = Math.min(TRANSIENT_RETRY_MAX_MS, Math.max(TRANSIENT_RETRY_MIN_MS, delay))
+  return error
+}
+
+/** Delay a rate-limited service asked for (Retry-After or X-RateLimit-Reset). */
+function rateLimitDelayMs(headers, now = Date.now()) {
+  const retryAfter = Number(headers.get('retry-after'))
+  if (headers.has('retry-after') && Number.isFinite(retryAfter) && retryAfter >= 0) return retryAfter * 1000
+  const reset = Number(headers.get('x-ratelimit-reset'))
+  if (Number.isFinite(reset) && reset > 0) return reset * 1000 - now
+  return TRANSIENT_RETRY_DEFAULT_MS
+}
+
 async function fetchJson(url, options, maxBytes) {
-  const response = await fetch(url, Object.assign({}, options, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  }))
+  const host = new URL(url).host
+  let response
+  try {
+    response = await fetch(url, Object.assign({}, options, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    }))
+  } catch (err) {
+    throw transientError(`${host} 暂时无法访问：${err && err.message ? err.message : err}`)
+  }
+  const headers = response.headers
+  const rateLimited = response.status === 429
+    || (response.status === 403 && (headers.get('x-ratelimit-remaining') === '0' || headers.has('retry-after')))
+  if (rateLimited) throw transientError(`${host} 请求被限流（HTTP ${response.status}）`, rateLimitDelayMs(headers))
+  if (response.status >= 500) throw transientError(`${host} 暂时不可用（HTTP ${response.status}）`)
   return readJsonLimited(response, maxBytes, { label: 'Runtime security response' })
 }
 
@@ -495,11 +531,8 @@ async function verifyOfficialGitHubRelease(release) {
   return normalizedRelease
 }
 
-async function verifyRuntimeProvenance(release, installed) {
-  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
-    throw new Error('installed DSH repository identity does not match expected publisher source')
-  }
-
+/** Registry signature + immutable GitHub release; needs no installed files. */
+async function verifyReleaseProvenance(release) {
   const keysBody = await fetchJson(REGISTRY_KEYS_URL, {
     method: 'GET',
     headers: {
@@ -513,6 +546,17 @@ async function verifyRuntimeProvenance(release, installed) {
   return true
 }
 
+function assertInstalledIdentity(installed) {
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+}
+
+async function verifyRuntimeProvenance(release, installed) {
+  assertInstalledIdentity(installed)
+  return verifyReleaseProvenance(release)
+}
+
 async function installOfficialVersion(release, options = {}) {
   if (!release || !isSafeVersion(release.version)) throw new Error('invalid runtime release')
   if (release.deprecated) throw new Error(`官方包已标记 deprecated：${release.deprecated}`)
@@ -520,6 +564,10 @@ async function installOfficialVersion(release, options = {}) {
 
   const existing = validateInstalledVersion(release.version)
   if (existing && !options.forceReinstall) return existing
+  // Authenticity is checked before anything is downloaded: it needs only the
+  // registry metadata, and a GitHub rate limit or outage then fails in seconds
+  // instead of after installing hundreds of packages.
+  await verifyReleaseProvenance(release)
   const root = versionDir(release.version)
   if (fs.existsSync(root)) fs.rmSync(root, { recursive: true, force: true })
   fs.mkdirSync(root, { recursive: true })
@@ -574,10 +622,10 @@ async function installOfficialVersion(release, options = {}) {
     throw new Error(`managed runtime resolved untested first-party versions: ${drift.slice(0, 5).join(', ')}`)
   }
 
-  // Authenticity must be independently verified before candidate JavaScript is
-  // ever executed by --version or dsh web. Integrity from the same npm metadata
-  // is not treated as an independent publisher identity.
-  await verifyRuntimeProvenance(release, installed)
+  // Publisher authenticity was verified before the install; candidate
+  // JavaScript runs (--version, dsh web) only after the installed identity
+  // also matches.
+  assertInstalledIdentity(installed)
   const smokeHome = path.join(runtimeRoot(), 'smoke-home', `${release.version}-${Date.now()}`)
   await probeDshBin(installed.bin, smokeHome)
   // Do not recursively remove DSH_HOME here. DSH profiles may contain Windows
@@ -671,11 +719,17 @@ async function checkAndStageUpdate(options = {}) {
     const settings = updateSettings()
     const state = loadState()
     if (!options.force && !settings.autoUpdate) return { status: 'disabled', current: sessionVersion }
-    if (!options.force && !shouldCheck(state.lastCheckedAt, Date.now(), CHECK_INTERVAL_MS)) {
-      return { status: 'fresh', current: sessionVersion, latest: state.latestVersion }
+    if (!options.force) {
+      const retryAt = Date.parse(state.retryAt || '')
+      if (Number.isFinite(retryAt)) {
+        if (Date.now() < retryAt) return { status: 'deferred', current: sessionVersion, retryAt: state.retryAt }
+      } else if (!shouldCheck(state.lastCheckedAt, Date.now(), CHECK_INTERVAL_MS)) {
+        return { status: 'fresh', current: sessionVersion, latest: state.latestVersion }
+      }
     }
 
     state.lastCheckedAt = new Date().toISOString()
+    state.retryAt = null
     try {
       const release = await fetchOfficialRelease(settings.channel)
       state.latestVersion = release.version
@@ -713,7 +767,9 @@ async function checkAndStageUpdate(options = {}) {
       try {
         vulnerabilities = await queryOsv(release.version)
       } catch (err) {
-        throw new Error(`OSV 安全检查不可用，自动更新按 fail-closed 阻止：${err.message}`)
+        const blocked = new Error(`OSV 安全检查不可用，自动更新按 fail-closed 阻止：${err.message}`)
+        if (err && err.transient) Object.assign(blocked, { transient: true, retryAfterMs: err.retryAfterMs })
+        throw blocked
       }
       if (vulnerabilities.length > 0) {
         const reason = `OSV 已知漏洞：${vulnerabilities.join(', ')}`
@@ -735,9 +791,10 @@ async function checkAndStageUpdate(options = {}) {
       return { status: 'staged', current, latest: release.version, integrity: release.integrity }
     } catch (err) {
       state.lastError = String(err && err.message ? err.message : err).slice(0, 1500)
+      if (err && err.transient) state.retryAt = new Date(Date.now() + err.retryAfterMs).toISOString()
       saveState(state)
-      appendLog(`update check failed: ${state.lastError}`)
-      return { status: 'error', current: sessionVersion, error: state.lastError }
+      appendLog(`update check failed${state.retryAt ? ` (transient, retry at ${state.retryAt})` : ''}: ${state.lastError}`)
+      return { status: 'error', current: sessionVersion, error: state.lastError, retryAt: state.retryAt }
     }
   })()
   try {
