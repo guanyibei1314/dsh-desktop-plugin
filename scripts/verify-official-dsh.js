@@ -5,7 +5,7 @@ const path = require('path')
 const {
   PACKAGE_NAME,
   REGISTRY_URL,
-  normalizeRegistryRelease,
+  evaluateBundledRuntime,
 } = require('../runtime-update-core')
 
 const MAX_BYTES = 6 * 1024 * 1024
@@ -23,20 +23,22 @@ async function main() {
   const bytes = new Uint8Array(await response.arrayBuffer())
   if (bytes.byteLength > MAX_BYTES) throw new Error('official registry metadata exceeds size limit')
   const metadata = JSON.parse(new TextDecoder().decode(bytes))
-  const release = normalizeRegistryRelease(metadata, 'stable')
 
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'))
   const deps = pkg.dependencies || {}
-  if (deps[PACKAGE_NAME] !== release.version) {
-    throw new Error(`bundled ${PACKAGE_NAME}=${deps[PACKAGE_NAME]} but official latest=${release.version}`)
-  }
+  // The bundled version must be official and the newest one this Desktop build
+  // supports; a newer latest that needs the new web auth/API is only reported.
+  const { status, latest, bundled } = evaluateBundledRuntime(metadata, deps[PACKAGE_NAME])
   const mismatches = Object.entries(deps)
     .filter(([name]) => name.startsWith('@deepseek-ai/dsh-'))
-    .filter(([, version]) => version !== release.version)
+    .filter(([, version]) => version !== bundled.version)
   if (mismatches.length) {
     throw new Error(`bundled DSH family is not version-coherent: ${JSON.stringify(mismatches)}`)
   }
-  console.log(`[official-dsh] latest=${release.version} bundled=${deps[PACKAGE_NAME]} integrity=${release.integrity}`)
+  if (status === 'latest-unsupported') {
+    console.log(`[official-dsh] NOTICE official latest=${latest.version} requires DSH web auth/API integration not in this Desktop build; keeping supported bundled=${bundled.version}`)
+  }
+  console.log(`[official-dsh] latest=${latest.version} bundled=${bundled.version} integrity=${bundled.integrity}`)
 }
 
 main().catch((error) => {

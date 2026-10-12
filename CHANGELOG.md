@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Updated the pinned full Git for Windows installer from 2.55.0(5) to the official 2.56.0(2) release (`v2.56.0.windows.2`, SHA-256 `52188f917b378f00c70ec136bcf090005f30d44fbc4eba0bce759cc6592d60f6`), so the live toolchain gate passes again.
+- Defined the DSH versions this Desktop build supports: DSH 0.1.2+ requires `dsh web` launch-token/cookie authentication and 0.2 replaced the HTTP RPC/event endpoints Desktop drives. The Runtime updater now reports such official releases as `unsupported` instead of downloading them every day and failing the activation probe; the release gate requires the bundled DSH to be the newest supported official release and only reports an unsupported npm latest; the runtime-update smoke exercises the newest supported official release.
+- Reinstalling the bundled DSH Runtime now pins every `@deepseek-ai/*` package to the version Desktop ships (pnpm `overrides`) and fails closed if the resulting `pnpm-lock.yaml` resolves any other first-party version. Unpinned, DSH's caret ranges resolved `cordis@4.0.4`, with which the bundled DSH 0.1.1-rc.2 crashes at startup.
 - Fixed `dsh web` opening the system browser: Standard, Creator and the Runtime update/preflight probe now launch DSH with `--no-open`.
 - Fixed Creator rejecting Chinese and other Unicode titles: content folders may use any title text; separators, drive/stream colons, wildcard/quote and control/bidi/zero-width characters, trailing dots/spaces and Windows reserved device names are still rejected, and existing Unicode folders are now listed.
 - Fixed the Standard error page's 5-second retry racing a slow Runtime cold start (both attempts failed and one DSH process was orphaned): concurrent starts and page loads now share one in-flight attempt.

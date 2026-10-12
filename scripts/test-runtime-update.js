@@ -4,13 +4,19 @@ const assert = require('assert')
 const { createSign, generateKeyPairSync } = require('crypto')
 const {
   EXPECTED_REPOSITORY,
+  FIRST_UNSUPPORTED_DSH_VERSION,
   PACKAGE_NAME,
   compareVersions,
+  evaluateBundledRuntime,
+  firstPartyOverridesYaml,
   isDshBinArgument,
   isSafeVersion,
+  isSupportedRuntimeVersion,
+  lockedFirstPartyDrift,
   normalizeAttestations,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRegistryVersion,
   normalizeRepository,
   selectRegistryTag,
   shouldCheck,
@@ -149,5 +155,97 @@ assert.strictEqual(isDshBinArgument('/tmp/node_modules/not-dsh/lib/bin.js'), fal
 assert.strictEqual(shouldCheck(null, Date.now()), true)
 assert.strictEqual(shouldCheck(new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString(), Date.now()), true)
 assert.strictEqual(shouldCheck(new Date().toISOString(), Date.now()), false)
+
+// Desktop drives only the pre-auth DSH web Runtime (DSH 0.1.2 added launch-token
+// cookies; 0.2 replaced the HTTP RPC surface).
+assert.strictEqual(FIRST_UNSUPPORTED_DSH_VERSION, '0.1.2-0')
+for (const version of ['0.1.0-rc.8', '0.1.1-rc.2', '0.1.1']) assert.strictEqual(isSupportedRuntimeVersion(version), true, version)
+for (const version of ['0.1.2-alpha.2', '0.1.2-rc.1', '0.1.5-rc.2', '0.1.7-rc.2', '0.2.0-rc.2', '1.0.0', 'not-a-version']) {
+  assert.strictEqual(isSupportedRuntimeVersion(version), false, version)
+}
+
+function gateFixture(latest, versions) {
+  const metadata = { name: PACKAGE_NAME, 'dist-tags': { latest }, versions: {} }
+  for (const [index, version] of versions.entries()) {
+    metadata.versions[version] = versionFixture(version, `sha512-${Buffer.from(`gate-${index}`).toString('base64')}`)
+  }
+  return metadata
+}
+const exact = normalizeRegistryVersion(gateFixture('0.2.0-rc.2', ['0.1.1-rc.2', '0.2.0-rc.2']), '0.1.1-rc.2')
+assert.strictEqual(exact.version, '0.1.1-rc.2')
+assert.throws(() => normalizeRegistryVersion(gateFixture('0.2.0-rc.2', ['0.2.0-rc.2']), '0.1.1-rc.2'), /registry version metadata mismatch/)
+assert.throws(() => normalizeRegistryVersion({ name: 'evil', versions: {} }, '0.1.1-rc.2'), /package mismatch/)
+assert.throws(() => normalizeRegistryVersion(gateFixture('0.1.1-rc.2', ['0.1.1-rc.2']), '0.1.1;calc'), /version is invalid/)
+
+assert.strictEqual(evaluateBundledRuntime(gateFixture('0.1.1-rc.2', ['0.1.1-rc.2']), '0.1.1-rc.2').status, 'current')
+const unsupportedLatest = evaluateBundledRuntime(gateFixture('0.2.0-rc.2', ['0.1.1-rc.2', '0.2.0-rc.2']), '0.1.1-rc.2')
+assert.strictEqual(unsupportedLatest.status, 'latest-unsupported', 'a newer latest that needs the new web auth must not fail the gate')
+assert.strictEqual(unsupportedLatest.latest.version, '0.2.0-rc.2')
+assert.throws(
+  () => evaluateBundledRuntime(gateFixture('0.1.1', ['0.1.1-rc.2', '0.1.1']), '0.1.1-rc.2'),
+  /official latest=0\.1\.1 is supported/,
+  'a newer supported latest must still be bundled',
+)
+assert.throws(
+  () => evaluateBundledRuntime(gateFixture('0.2.0-rc.2', ['0.2.0-rc.2']), '0.2.0-rc.2'),
+  /not supported by this Desktop build/,
+  'bundling an unsupported Runtime must fail the gate',
+)
+assert.throws(
+  () => evaluateBundledRuntime(gateFixture('0.2.0-rc.2', ['0.2.0-rc.2']), '0.1.1-rc.2'),
+  /registry version metadata mismatch/,
+  'the bundled version must be an official published release',
+)
+
+// Reinstalling the bundled Runtime pins the first-party family it ships; caret
+// ranges otherwise resolve untested newer packages (cordis 4.0.4 broke boot).
+const pins = { '@deepseek-ai/cordis': '4.0.1', '@deepseek-ai/dsh': '0.1.1-rc.2' }
+assert.strictEqual(
+  firstPartyOverridesYaml(Object.assign({ 'left-pad': '1.0.0', '@deepseek-ai/evil': '1.0.0\n  inject: 1' }, pins)),
+  'overrides:\n  "@deepseek-ai/cordis": "4.0.1"\n  "@deepseek-ai/dsh": "0.1.1-rc.2"\n',
+  'only valid first-party pins are written, quoted, in stable order',
+)
+assert.throws(() => firstPartyOverridesYaml({ 'left-pad': '1.0.0' }), /no valid first-party pins/)
+const pinnedLock = [
+  "lockfileVersion: '9.0'",
+  '',
+  'importers:',
+  '  .:',
+  '    dependencies:',
+  "      '@deepseek-ai/dsh':",
+  '        version: 0.1.1-rc.2',
+  '',
+  'packages:',
+  '',
+  "  '@deepseek-ai/cordis@4.0.1':",
+  '    resolution: {integrity: sha512-AAAA}',
+  '',
+  "  '@deepseek-ai/dsh-authorization@0.1.1-rc.2':",
+  '    resolution: {integrity: sha512-BBBB}',
+  '',
+  "  '@deepseek-ai/dsh@0.1.1-rc.2':",
+  '    resolution: {integrity: sha512-CCCC}',
+  '',
+  '  commander@15.0.0:',
+  '    resolution: {integrity: sha512-DDDD}',
+  '',
+  'snapshots:',
+  '',
+  "  '@deepseek-ai/cordis@4.0.4':",
+  '    dependencies: {}',
+  '',
+].join('\n')
+assert.deepStrictEqual(lockedFirstPartyDrift(pinnedLock, pins, '0.1.1-rc.2'), [], 'pinned packages and same-release peers pass; only the packages section counts')
+assert.deepStrictEqual(
+  lockedFirstPartyDrift(pinnedLock.replace("'@deepseek-ai/cordis@4.0.1':", "'@deepseek-ai/cordis@4.0.4':"), pins, '0.1.1-rc.2'),
+  ['@deepseek-ai/cordis@4.0.4 (expected 4.0.1)'],
+)
+assert.deepStrictEqual(
+  lockedFirstPartyDrift(pinnedLock.replace("'@deepseek-ai/dsh-authorization@0.1.1-rc.2':", "'@deepseek-ai/dsh-authorization@0.1.7-rc.2':"), pins, '0.1.1-rc.2'),
+  ['@deepseek-ai/dsh-authorization@0.1.7-rc.2 (expected 0.1.1-rc.2)'],
+  'an unpinned first-party peer must carry the release version',
+)
+assert.deepStrictEqual(lockedFirstPartyDrift('lockfileVersion: 9.0\n', pins, '0.1.1-rc.2'), ['pnpm lock has no packages section'])
+assert.deepStrictEqual(lockedFirstPartyDrift('packages:\n\n  left-pad@1.0.0:\n    x: 1\n', pins, '0.1.1-rc.2'), ['pnpm lock lists no first-party packages'])
 
 console.log('[runtime-update] functional exact npm Registry signature + provenance/immutable GitHub identity tests passed')

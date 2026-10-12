@@ -2,7 +2,7 @@
 !include "WinMessages.nsh"
 
 !define DSH_NODE_INSTALLER "node-v24.21.0-x64.msi"
-!define DSH_GIT_INSTALLER "Git-2.55.0.5-64-bit.exe"
+!define DSH_GIT_INSTALLER "Git-2.56.0.2-64-bit.exe"
 
 !macro customInstall
   ; The official full installers are embedded into the DSH NSIS payload at
@@ -60,7 +60,7 @@
   ${EndIf}
 
   ${If} "$8" == "1"
-    DetailPrint "Installing full Git for Windows 2.55.0(5) and registering Windows PATH..."
+    DetailPrint "Installing full Git for Windows 2.56.0(2) and registering Windows PATH..."
     ; PathOption=Cmd is Git for Windows' safe full-install PATH mode: the full
     ; Git package (Git Bash/GUI/LFS/OpenSSH/GCM/etc.) is installed, while only
     ; Git's cmd wrappers enter Windows PATH instead of Unix tools such as

@@ -122,6 +122,7 @@ $('check').addEventListener('click', () => run(
     if (result.status === 'staged') return `Runtime ${result.latest} 已下载并通过隔离启动测试，重启后完成最终激活预检。`
     if (result.status === 'current') return `当前已是最新版本 ${result.current}。`
     if (result.status === 'blocked') return `版本 ${result.latest || '未知'} 被安全策略阻止，当前版本保持不变。`
+    if (result.status === 'unsupported') return `官方最新版 ${result.latest || '未知'} 需要更新的 DSH Desktop 才能使用（新的 Web 登录与接口），当前继续使用 ${result.current}。`
     if (result.status === 'error') return '检查失败，当前 Runtime 保持不变。'
     return `检查完成：${result.status || 'done'}`
   },
