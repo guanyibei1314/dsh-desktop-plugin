@@ -4,6 +4,7 @@ const { app } = require('electron')
 const runtimeManager = require('./runtime-manager')
 const runtimeControl = require('./runtime-control')
 const desktopMode = require('./desktop-mode')
+const bootSplash = require('./boot-splash')
 
 // Redirect every desktop-owned DSH CLI spawn (main service, Creator service,
 // plugin manager and bundled skin reconciliation) through one validated runtime
@@ -31,9 +32,17 @@ if (PRIMARY_INSTANCE && !RUNTIME_UPDATE_SMOKE) {
   registerRuntimeSettings()
   desktopExtensions.registerDesktopExtensions()
   registerPluginMarketIpc()
+
+  // A second launch can arrive before main.js / creator-main.js register their
+  // own handlers (boot below can take a while); bring the splash forward then.
+  app.on('second-instance', () => bootSplash.focusSplash())
 }
 
 async function boot() {
+  // Show a window before any slow boot work: a pending Runtime preflight can
+  // take up to 90 seconds. The mode host keeps it until its own first frame.
+  if (!SMOKE) bootSplash.showSplash()
+
   // A staged official DSH update is activated only after it can start against
   // the user's real private Profile. Failed candidates stay blocked and the
   // prior/bundled runtime remains selected for this process.

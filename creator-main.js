@@ -29,6 +29,7 @@ const {
 } = require('./creator-core')
 const desktopMode = require('./desktop-mode')
 const lifecycle = require('./desktop-lifecycle')
+const bootSplash = require('./boot-splash')
 const typesafe = require('./creator-typesafe')
 
 const CREATOR_HTML = path.join(__dirname, 'creator.html')
@@ -44,6 +45,7 @@ let creatorWindow = null
 let tray = null
 let harnessProc = null
 let harnessUrl = ''
+let harnessState = 'starting' // starting | ready | failed
 let quitting = false
 
 function physicalNodeModulePath(...parts) {
@@ -380,7 +382,7 @@ function openContent(id) {
 function registerIpc() {
   ipcMain.handle('creator:status', (event) => {
     requireCreatorSender(event)
-    return { mode: desktopMode.getMode(), harnessUrl, version: app.getVersion() }
+    return { mode: desktopMode.getMode(), harnessUrl, harnessState, version: app.getVersion() }
   })
   ipcMain.handle('creator:state:get', (event) => {
     requireCreatorSender(event)
@@ -536,28 +538,39 @@ function createCreatorWindow() {
     }
   })
   creatorWindow.on('closed', () => { creatorWindow = null })
-  creatorWindow.once('ready-to-show', () => { if (!SMOKE) creatorWindow.show() })
+  creatorWindow.once('ready-to-show', () => {
+    bootSplash.closeSplash()
+    if (!SMOKE) creatorWindow.show()
+  })
+  // The page reads harnessState through creator:status on load; later Runtime
+  // readiness or failure is pushed through creator:harness-url.
   creatorWindow.webContents.on('did-finish-load', () => {
-    creatorWindow.webContents.send('creator:harness-url', harnessUrl)
     if (SMOKE) {
       console.log('CREATOR_SMOKE_OK')
       setTimeout(() => app.exit(0), 200)
     }
   })
   Menu.setApplicationMenu(buildCreatorMenu())
-  creatorWindow.loadFile(CREATOR_HTML).catch((error) => dialog.showErrorBox('DSH Creator', error.message))
+  creatorWindow.loadFile(CREATOR_HTML).catch((error) => {
+    bootSplash.closeSplash()
+    dialog.showErrorBox('DSH Creator', error.message)
+  })
   createTray()
 }
 
 async function startCreator() {
   registerIpc()
+  // Content, ideas and operations work offline, so the window must not wait for
+  // a DSH cold start (up to 90 seconds); the conversation panel shows progress.
+  createCreatorWindow()
   try {
     harnessUrl = await startHarness()
   } catch (error) {
     creatorLog(`harness error: ${error && error.stack ? error.stack : error}`)
     harnessUrl = ''
   }
-  createCreatorWindow()
+  harnessState = harnessUrl ? 'ready' : 'failed'
+  if (creatorWindow && !creatorWindow.isDestroyed()) creatorWindow.webContents.send('creator:harness-url', harnessUrl)
 }
 
 // bootstrap.js holds the single-instance lock; a second launch focuses Creator.

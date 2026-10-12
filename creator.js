@@ -110,7 +110,7 @@ async function loadAll(showToast = false) {
     status = nextStatus
     state = nextState
     contents = await bridge.listContents()
-    updateRuntime(status && status.harnessUrl)
+    updateRuntime(status && status.harnessUrl, status && status.harnessState)
     render()
     if (showToast) toast('已刷新 Creator 工作区')
   } catch (error) {
@@ -120,13 +120,20 @@ async function loadAll(showToast = false) {
   }
 }
 
-function updateRuntime(url) {
+function updateRuntime(url, state = url ? 'ready' : 'failed') {
   if (url) {
     runtimeState.className = 'runtime-state ready'
     runtimeState.lastChild.textContent = 'DSH 会话已就绪'
-    conversationFrame.src = url
+    // Re-assigning the same src reloads the conversation; refresh must not.
+    if (conversationFrame.getAttribute('src') !== url) conversationFrame.src = url
     conversationFrame.hidden = false
     aiEmpty.hidden = true
+  } else if (state === 'starting') {
+    // The window opens before the Runtime; keep the startup spinner from creator.html.
+    runtimeState.className = 'runtime-state'
+    runtimeState.lastChild.textContent = 'DSH 会话启动中'
+    conversationFrame.hidden = true
+    aiEmpty.hidden = false
   } else {
     runtimeState.className = 'runtime-state error'
     runtimeState.lastChild.textContent = 'DSH 会话暂不可用'

@@ -121,6 +121,76 @@ function createFakeProcesses(options = {}) {
   }
 }
 
+/** Recording BrowserWindow/Tray fakes for scenarios that open windows. */
+function createWindowFakes(timeline) {
+  const windows = []
+  class FakeWebContents extends EventEmitter {
+    constructor(owner) {
+      super()
+      this.owner = owner
+      this.sent = []
+      this.session = { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }
+    }
+    send(channel, payload) {
+      this.sent.push([channel, payload])
+      timeline.push(`send:${channel}`)
+    }
+    setWindowOpenHandler() {}
+    reload() {}
+    getURL() { return this.owner.loaded || '' }
+  }
+  class FakeBrowserWindow extends EventEmitter {
+    constructor(windowOptions = {}) {
+      super()
+      this.options = windowOptions
+      this.loaded = ''
+      this.destroyed = false
+      this.visible = windowOptions.show !== false
+      this.focused = 0
+      this.webContents = new FakeWebContents(this)
+      windows.push(this)
+    }
+    loadFile(file) {
+      this.loaded = path.basename(file)
+      timeline.push(`window:load:${this.loaded}`)
+      return Promise.resolve()
+    }
+    loadURL(url) {
+      this.loaded = String(url)
+      timeline.push('window:load-url')
+      return Promise.resolve()
+    }
+    show() { this.visible = true }
+    hide() { this.visible = false }
+    focus() {
+      this.focused += 1
+      timeline.push(`window:focus:${this.loaded}`)
+    }
+    isDestroyed() { return this.destroyed }
+    isMinimized() { return false }
+    isVisible() { return this.visible }
+    restore() {}
+    destroy() {
+      if (this.destroyed) return
+      this.destroyed = true
+      timeline.push(`window:destroy:${this.loaded}`)
+      this.emit('closed')
+    }
+    close() { this.destroy() }
+    setMenuBarVisibility() {}
+    setTitle() {}
+    flashFrame() {}
+    static getAllWindows() { return windows.filter((window) => !window.destroyed) }
+  }
+  class FakeTray extends EventEmitter {
+    setToolTip() {}
+    setContextMenu() {}
+    isDestroyed() { return false }
+    destroy() {}
+  }
+  return { windows, FakeBrowserWindow, FakeTray }
+}
+
 function createElectronStub(options = {}) {
   const userData = options.userData
   const timeline = options.timeline || []
@@ -163,8 +233,10 @@ function createElectronStub(options = {}) {
       throw new Error(`${name} must not be constructed by this behavior test`)
     }
   }
+  const fakes = options.windows ? createWindowFakes(timeline) : null
   return {
     app,
+    windows: fakes ? fakes.windows : [],
     ipcMain: {
       handle: (channel, handler) => ipcHandlers.set(channel, handler),
       on: (channel, handler) => ipcHandlers.set(channel, handler),
@@ -172,10 +244,10 @@ function createElectronStub(options = {}) {
     ipcHandlers,
     Menu,
     originalBuildFromTemplate,
-    BrowserWindow: Object.assign(notExpected('BrowserWindow'), { getAllWindows: () => [] }),
+    BrowserWindow: fakes ? fakes.FakeBrowserWindow : Object.assign(notExpected('BrowserWindow'), { getAllWindows: () => [] }),
     BaseWindow: notExpected('BaseWindow'),
     WebContentsView: notExpected('WebContentsView'),
-    Tray: notExpected('Tray'),
+    Tray: fakes ? fakes.FakeTray : notExpected('Tray'),
     Notification: Object.assign(notExpected('Notification'), { isSupported: () => false }),
     nativeImage: { createFromPath: () => ({}) },
     dialog: { showErrorBox() {}, showMessageBox: async () => ({}) },
@@ -241,6 +313,15 @@ async function withDesktop(options, scenario) {
     processes,
     require: (relative) => require(path.join(ROOT, relative)),
     loadWithInternals,
+    /** Replace a repo module for this scenario (e.g. hold boot inside one step). */
+    stubModule: (relative, exports) => {
+      const file = path.join(ROOT, relative)
+      const stub = new Module(file, module)
+      stub.filename = file
+      stub.loaded = true
+      stub.exports = exports
+      require.cache[file] = stub
+    },
   }
   try {
     return await scenario(harness)

@@ -24,6 +24,7 @@ const { spawn } = require('child_process')
 const { pathToFileURL } = require('url')
 const { readJsonLimited } = require('./secure-fetch')
 const lifecycle = require('./desktop-lifecycle')
+const bootSplash = require('./boot-splash')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
@@ -43,11 +44,9 @@ const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
 const ERROR_HTML = path.join(__dirname, 'error.html')
 const SEND_DIALOG_HTML = path.join(__dirname, 'send-dialog.html')
-const SPLASH_HTML = path.join(__dirname, 'splash.html')
 const TERMINAL_HTML = path.join(__dirname, 'terminal.html')
 
 let win = null
-let splash = null
 let sendDialog = null
 let termWin = null
 let tray = null
@@ -688,32 +687,13 @@ function loadErrorPage() {
  * splash decouples perceived startup latency from the plugin count.
  */
 function createSplash() {
-  if (splash !== null && !splash.isDestroyed()) return
-  splash = new BrowserWindow({
-    width: 420,
-    height: 320,
-    frame: false,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    show: true,
-    backgroundColor: '#0d1117',
-    icon: path.join(ASSETS, 'icon.png'),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-  splash.on('closed', () => { splash = null })
-  splash.loadFile(SPLASH_HTML).catch(() => {})
+  // Reuses the splash bootstrap.js showed before the Runtime preflight.
+  bootSplash.showSplash()
 }
 
 /** Dismiss the startup splash once the real shell has a first frame. */
 function dismissSplash() {
-  if (splash !== null && !splash.isDestroyed()) splash.destroy()
-  splash = null
+  bootSplash.closeSplash()
 }
 
 function showWindow() {

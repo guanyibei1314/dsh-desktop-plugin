@@ -15,7 +15,7 @@ const html = read('creator.html')
 const pkg = JSON.parse(read('package.json'))
 
 assert.strictEqual(pkg.version, '0.10.0', 'dual-mode release must be versioned as 0.10.0')
-for (const file of ['desktop-mode.js', 'desktop-lifecycle.js', 'creator-core.js', 'creator-typesafe.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
+for (const file of ['desktop-mode.js', 'desktop-lifecycle.js', 'boot-splash.js', 'creator-core.js', 'creator-typesafe.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
   assert.ok(pkg.build.files.includes(file), `${file} must be packaged`)
 }
 assert.ok(pkg.scripts['smoke:creator'], 'Creator mode must have an explicit smoke entrypoint')
