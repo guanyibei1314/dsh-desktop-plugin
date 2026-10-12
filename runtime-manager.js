@@ -12,14 +12,19 @@ const {
   REGISTRY_URL,
   OSV_URL,
   compareVersions,
+  firstPartyOverridesYaml,
   isDshBinArgument,
   isSafeVersion,
+  isSupportedRuntimeVersion,
+  lockedFirstPartyDrift,
   normalizeOsvResponse,
   normalizeRegistryRelease,
+  normalizeRegistryVersion,
   normalizeRepository,
   shouldCheck,
 } = require('./runtime-update-core')
 const { readJsonLimited } = require('./secure-fetch')
+const desktopSettings = require('./desktop-settings')
 const {
   REGISTRY_KEYS_URL,
   officialReleaseApiUrl,
@@ -35,13 +40,30 @@ const MAX_REGISTRY_BYTES = 6 * 1024 * 1024
 const MAX_OSV_BYTES = 2 * 1024 * 1024
 const PROBE_TIMEOUT_MS = 90000
 const STATE_SCHEMA = 1
+// Rate limits (anonymous api.github.com allows 60 requests/hour per IP), network
+// errors and 5xx are transient: retry soon instead of waiting a full day.
+const TRANSIENT_RETRY_MIN_MS = 15 * 60 * 1000
+const TRANSIENT_RETRY_DEFAULT_MS = 60 * 60 * 1000
+const TRANSIENT_RETRY_MAX_MS = 6 * 60 * 60 * 1000
 const originalSpawn = childProcess.spawn.bind(childProcess)
+// CI passes its read-only workflow token so shared runners are not throttled by
+// the anonymous api.github.com limit. A dedicated name keeps Desktop from ever
+// picking up a user's own GITHUB_TOKEN. It is sent only to the fixed
+// api.github.com URLs (redirects refused) and is removed from the environment
+// here, before any DSH Runtime, pnpm or npm child can inherit it.
+const GITHUB_API_TOKEN = takeEnv('DSH_RUNTIME_GITHUB_TOKEN')
 
 let spawnPatched = false
 let sessionDshBin = bundledDshBinPath()
 let sessionVersion = bundledDshVersion()
 let updateInFlight = null
 let scheduledTimer = null
+
+function takeEnv(name) {
+  const value = process.env[name] || ''
+  delete process.env[name]
+  return value
+}
 
 function physicalNodeModulePath(...parts) {
   const inAsar = path.join(__dirname, 'node_modules', ...parts)
@@ -65,6 +87,17 @@ function bundledDshVersion() {
   } catch (err) {
     return '0.0.0'
   }
+}
+
+/** Exact @deepseek-ai/* versions Desktop ships (npm hoists the whole family). */
+function bundledFirstPartyPins() {
+  const scopeDir = physicalNodeModulePath('@deepseek-ai')
+  const pins = {}
+  for (const entry of fs.readdirSync(scopeDir)) {
+    const pkg = readJson(path.join(scopeDir, entry, 'package.json'))
+    if (pkg && pkg.name === `@deepseek-ai/${entry}` && isSafeVersion(pkg.version)) pins[pkg.name] = pkg.version
+  }
+  return pins
 }
 
 function pnpmBinPath() {
@@ -105,10 +138,6 @@ function logFile() {
   return path.join(runtimeRoot(), 'runtime-update.log')
 }
 
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
 function ensureDirs() {
   fs.mkdirSync(runtimeRoot(), { recursive: true })
   fs.mkdirSync(versionsDir(), { recursive: true })
@@ -138,6 +167,10 @@ function defaultState() {
     lastUpdateAt: null,
     lastError: null,
     blockedVersions: {},
+    // Version the user rolled back from; automatic checks never re-stage it.
+    heldVersion: null,
+    // After a transient failure, the next automatic check runs at this time.
+    retryAt: null,
   }
 }
 
@@ -148,9 +181,10 @@ function loadState() {
   if (!state.blockedVersions || typeof state.blockedVersions !== 'object' || Array.isArray(state.blockedVersions)) {
     state.blockedVersions = {}
   }
-  for (const key of ['activeVersion', 'previousVersion', 'pendingVersion', 'latestVersion']) {
+  for (const key of ['activeVersion', 'previousVersion', 'pendingVersion', 'latestVersion', 'heldVersion']) {
     if (state[key] !== null && !isSafeVersion(state[key])) state[key] = null
   }
+  if (state.retryAt !== null && !Number.isFinite(Date.parse(state.retryAt))) state.retryAt = null
   return state
 }
 
@@ -168,7 +202,7 @@ function saveState(state) {
 }
 
 function updateSettings() {
-  const settings = readJson(settingsFile()) || {}
+  const settings = desktopSettings.readSettings()
   const envChannel = process.env.DSH_RUNTIME_CHANNEL
   const channel = envChannel === 'latest' || settings.dshRuntimeUpdateChannel === 'latest' ? 'latest' : 'stable'
   const autoFromEnv = process.env.DSH_RUNTIME_AUTO_UPDATE
@@ -353,7 +387,8 @@ async function probeDshBin(bin, home, timeoutMs = PROBE_TIMEOUT_MS) {
   const port = await pickPort()
   const child = originalSpawn(
     process.execPath,
-    ['--expose-internals', bin, 'web', '--host', '127.0.0.1', '--port', String(port)],
+    // --no-open: a probe must never hand its short-lived URL to the system browser.
+    ['--expose-internals', bin, 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'],
     { cwd: home, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env },
   )
   let output = ''
@@ -380,20 +415,51 @@ async function probeDshBin(bin, home, timeoutMs = PROBE_TIMEOUT_MS) {
   }
 }
 
+function transientError(message, retryAfterMs = TRANSIENT_RETRY_DEFAULT_MS) {
+  const error = new Error(message)
+  error.transient = true
+  const delay = Number.isFinite(retryAfterMs) ? retryAfterMs : TRANSIENT_RETRY_DEFAULT_MS
+  error.retryAfterMs = Math.min(TRANSIENT_RETRY_MAX_MS, Math.max(TRANSIENT_RETRY_MIN_MS, delay))
+  return error
+}
+
+/** Delay a rate-limited service asked for (Retry-After or X-RateLimit-Reset). */
+function rateLimitDelayMs(headers, now = Date.now()) {
+  const retryAfter = Number(headers.get('retry-after'))
+  if (headers.has('retry-after') && Number.isFinite(retryAfter) && retryAfter >= 0) return retryAfter * 1000
+  const reset = Number(headers.get('x-ratelimit-reset'))
+  if (Number.isFinite(reset) && reset > 0) return reset * 1000 - now
+  return TRANSIENT_RETRY_DEFAULT_MS
+}
+
 async function fetchJson(url, options, maxBytes) {
-  const response = await fetch(url, Object.assign({}, options, {
-    redirect: 'error',
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-  }))
+  const host = new URL(url).host
+  let response
+  try {
+    response = await fetch(url, Object.assign({}, options, {
+      redirect: 'error',
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    }))
+  } catch (err) {
+    throw transientError(`${host} 暂时无法访问：${err && err.message ? err.message : err}`)
+  }
+  const headers = response.headers
+  const rateLimited = response.status === 429
+    || (response.status === 403 && (headers.get('x-ratelimit-remaining') === '0' || headers.has('retry-after')))
+  if (rateLimited) throw transientError(`${host} 请求被限流（HTTP ${response.status}）`, rateLimitDelayMs(headers))
+  if (response.status >= 500) throw transientError(`${host} 暂时不可用（HTTP ${response.status}）`)
   return readJsonLimited(response, maxBytes, { label: 'Runtime security response' })
 }
 
-async function fetchOfficialRelease(channel) {
-  const metadata = await fetchJson(REGISTRY_URL, {
+async function fetchRegistryMetadata() {
+  return fetchJson(REGISTRY_URL, {
     method: 'GET',
     headers: { accept: 'application/json', 'user-agent': 'DSH-Desktop-Runtime-Updater/0.7' },
   }, MAX_REGISTRY_BYTES)
-  return normalizeRegistryRelease(metadata, channel)
+}
+
+async function fetchOfficialRelease(channel) {
+  return normalizeRegistryRelease(await fetchRegistryMetadata(), channel)
 }
 
 async function queryOsv(version) {
@@ -469,6 +535,7 @@ async function verifyOfficialGitHubRelease(release) {
     'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
     'x-github-api-version': '2022-11-28',
   }
+  if (GITHUB_API_TOKEN) headers.authorization = `Bearer ${GITHUB_API_TOKEN}`
   const releaseBody = await fetchJson(officialReleaseApiUrl(release.version), { method: 'GET', headers }, 2 * 1024 * 1024)
   const normalizedRelease = normalizeOfficialGitHubRelease(releaseBody, release.version)
   const sourceBody = await fetchJson(officialSourcePackageApiUrl(release.version), { method: 'GET', headers }, 1024 * 1024)
@@ -477,11 +544,8 @@ async function verifyOfficialGitHubRelease(release) {
   return normalizedRelease
 }
 
-async function verifyRuntimeProvenance(release, installed) {
-  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
-    throw new Error('installed DSH repository identity does not match expected publisher source')
-  }
-
+/** Registry signature + immutable GitHub release; needs no installed files. */
+async function verifyReleaseProvenance(release) {
   const keysBody = await fetchJson(REGISTRY_KEYS_URL, {
     method: 'GET',
     headers: {
@@ -495,6 +559,17 @@ async function verifyRuntimeProvenance(release, installed) {
   return true
 }
 
+function assertInstalledIdentity(installed) {
+  if (!installed || installed.repository !== EXPECTED_REPOSITORY) {
+    throw new Error('installed DSH repository identity does not match expected publisher source')
+  }
+}
+
+async function verifyRuntimeProvenance(release, installed) {
+  assertInstalledIdentity(installed)
+  return verifyReleaseProvenance(release)
+}
+
 async function installOfficialVersion(release, options = {}) {
   if (!release || !isSafeVersion(release.version)) throw new Error('invalid runtime release')
   if (release.deprecated) throw new Error(`官方包已标记 deprecated：${release.deprecated}`)
@@ -502,6 +577,10 @@ async function installOfficialVersion(release, options = {}) {
 
   const existing = validateInstalledVersion(release.version)
   if (existing && !options.forceReinstall) return existing
+  // Authenticity is checked before anything is downloaded: it needs only the
+  // registry metadata, and a GitHub rate limit or outage then fails in seconds
+  // instead of after installing hundreds of packages.
+  await verifyReleaseProvenance(release)
   const root = versionDir(release.version)
   if (fs.existsSync(root)) fs.rmSync(root, { recursive: true, force: true })
   fs.mkdirSync(root, { recursive: true })
@@ -510,6 +589,10 @@ async function installOfficialVersion(release, options = {}) {
     private: true,
     version: '0.0.0',
   }, null, 2), 'utf8')
+  // Reinstalling the bundled Runtime must reproduce the first-party family
+  // Desktop ships; caret ranges would otherwise pull untested newer packages.
+  const pins = release.version === bundledDshVersion() ? bundledFirstPartyPins() : null
+  if (pins) fs.writeFileSync(path.join(root, 'pnpm-workspace.yaml'), firstPartyOverridesYaml(pins), 'utf8')
 
   const pnpm = pnpmBinPath()
   if (!fs.existsSync(pnpm)) throw new Error('bundled pnpm is missing')
@@ -546,11 +629,16 @@ async function installOfficialVersion(release, options = {}) {
     fs.rmSync(root, { recursive: true, force: true })
     throw new Error('pnpm lock integrity does not match official registry metadata')
   }
+  const drift = pins ? lockedFirstPartyDrift(lock, pins, release.version) : []
+  if (drift.length > 0) {
+    fs.rmSync(root, { recursive: true, force: true })
+    throw new Error(`managed runtime resolved untested first-party versions: ${drift.slice(0, 5).join(', ')}`)
+  }
 
-  // Authenticity must be independently verified before candidate JavaScript is
-  // ever executed by --version or dsh web. Integrity from the same npm metadata
-  // is not treated as an independent publisher identity.
-  await verifyRuntimeProvenance(release, installed)
+  // Publisher authenticity was verified before the install; candidate
+  // JavaScript runs (--version, dsh web) only after the installed identity
+  // also matches.
+  assertInstalledIdentity(installed)
   const smokeHome = path.join(runtimeRoot(), 'smoke-home', `${release.version}-${Date.now()}`)
   await probeDshBin(installed.bin, smokeHome)
   // Do not recursively remove DSH_HOME here. DSH profiles may contain Windows
@@ -644,11 +732,17 @@ async function checkAndStageUpdate(options = {}) {
     const settings = updateSettings()
     const state = loadState()
     if (!options.force && !settings.autoUpdate) return { status: 'disabled', current: sessionVersion }
-    if (!options.force && !shouldCheck(state.lastCheckedAt, Date.now(), CHECK_INTERVAL_MS)) {
-      return { status: 'fresh', current: sessionVersion, latest: state.latestVersion }
+    if (!options.force) {
+      const retryAt = Date.parse(state.retryAt || '')
+      if (Number.isFinite(retryAt)) {
+        if (Date.now() < retryAt) return { status: 'deferred', current: sessionVersion, retryAt: state.retryAt }
+      } else if (!shouldCheck(state.lastCheckedAt, Date.now(), CHECK_INTERVAL_MS)) {
+        return { status: 'fresh', current: sessionVersion, latest: state.latestVersion }
+      }
     }
 
     state.lastCheckedAt = new Date().toISOString()
+    state.retryAt = null
     try {
       const release = await fetchOfficialRelease(settings.channel)
       state.latestVersion = release.version
@@ -660,6 +754,24 @@ async function checkAndStageUpdate(options = {}) {
         appendLog(`no update: current=${current} latest=${release.version}`)
         return { status: 'current', current, latest: release.version }
       }
+      if (state.heldVersion && state.heldVersion === release.version && !options.force) {
+        // The user rolled back from exactly this version; only an explicit
+        // manual check (or a newer release) may bring it back.
+        saveState(state)
+        appendLog(`hold: not re-staging ${release.version}, which the user rolled back from`)
+        return { status: 'held', current, latest: release.version }
+      }
+      if (state.heldVersion && (options.force || compareVersions(release.version, state.heldVersion) > 0)) {
+        appendLog(`hold on ${state.heldVersion} released (${options.force ? 'manual check' : `newer official ${release.version}`})`)
+        state.heldVersion = null
+      }
+      if (!isSupportedRuntimeVersion(release.version)) {
+        // Downloading it would only fail the activation probe (401) every day.
+        state.lastError = null
+        saveState(state)
+        appendLog(`official ${release.version} requires a newer DSH Desktop (web auth/API); staying on ${current}`)
+        return { status: 'unsupported', current, latest: release.version }
+      }
       if (!options.forceVersion && state.blockedVersions[release.version]) {
         return { status: 'blocked', current, latest: release.version, reason: state.blockedVersions[release.version].reason }
       }
@@ -668,7 +780,9 @@ async function checkAndStageUpdate(options = {}) {
       try {
         vulnerabilities = await queryOsv(release.version)
       } catch (err) {
-        throw new Error(`OSV 安全检查不可用，自动更新按 fail-closed 阻止：${err.message}`)
+        const blocked = new Error(`OSV 安全检查不可用，自动更新按 fail-closed 阻止：${err.message}`)
+        if (err && err.transient) Object.assign(blocked, { transient: true, retryAfterMs: err.retryAfterMs })
+        throw blocked
       }
       if (vulnerabilities.length > 0) {
         const reason = `OSV 已知漏洞：${vulnerabilities.join(', ')}`
@@ -690,9 +804,10 @@ async function checkAndStageUpdate(options = {}) {
       return { status: 'staged', current, latest: release.version, integrity: release.integrity }
     } catch (err) {
       state.lastError = String(err && err.message ? err.message : err).slice(0, 1500)
+      if (err && err.transient) state.retryAt = new Date(Date.now() + err.retryAfterMs).toISOString()
       saveState(state)
-      appendLog(`update check failed: ${state.lastError}`)
-      return { status: 'error', current: sessionVersion, error: state.lastError }
+      appendLog(`update check failed${state.retryAt ? ` (transient, retry at ${state.retryAt})` : ''}: ${state.lastError}`)
+      return { status: 'error', current: sessionVersion, error: state.lastError, retryAt: state.retryAt }
     }
   })()
   try {
@@ -716,7 +831,15 @@ function scheduleAutoUpdate() {
 async function runUpdaterSmoke() {
   ensureDirs()
   appendLog('runtime updater smoke started')
-  const release = await fetchOfficialRelease('stable')
+  // Exercise the full download/verify/install/probe/activate chain on the
+  // newest official release this build supports: npm latest when supported,
+  // otherwise the bundled version (itself an official published release).
+  const metadata = await fetchRegistryMetadata()
+  const latest = normalizeRegistryRelease(metadata, 'stable')
+  const release = isSupportedRuntimeVersion(latest.version)
+    ? latest
+    : normalizeRegistryVersion(metadata, bundledDshVersion())
+  if (release !== latest) appendLog(`runtime updater smoke: official latest ${latest.version} is unsupported; using bundled official ${release.version}`)
   const vulns = await queryOsv(release.version)
   if (vulns.length > 0) throw new Error(`official DSH ${release.version} has OSV findings: ${vulns.join(', ')}`)
   const installed = await installOfficialVersion(release, { forceReinstall: true })

@@ -27,7 +27,9 @@ function statusText(status) {
   if (!status) return '状态未知'
   const state = status.state || {}
   if (state.pendingVersion) return `Runtime ${state.pendingVersion} 已验证并暂存，重启后会用真实 Profile 做最终兼容性预检。`
+  if (state.lastError && state.retryAt) return `最近一次检查暂时失败（网络或请求限流），将于 ${fmtTime(state.retryAt)} 之后自动重试；当前仍使用已验证版本。`
   if (state.lastError) return '最近一次 Runtime 操作存在错误，当前仍使用已验证版本。'
+  if (state.heldVersion) return `你已从 Runtime ${state.heldVersion} 回滚，自动更新不会再装回这个版本；点击“立即检查更新”可解除。`
   if (Object.keys(state.blockedVersions || {}).length > 0) return '存在被安全策略阻止的 Runtime 版本；当前已验证 Runtime 不受影响。'
   if (state.latestVersion && status.current && state.latestVersion === status.current.version) return '当前 Runtime 已是最近一次检查到的版本。'
   return 'Runtime 更新系统正常。'
@@ -122,6 +124,9 @@ $('check').addEventListener('click', () => run(
     if (result.status === 'staged') return `Runtime ${result.latest} 已下载并通过隔离启动测试，重启后完成最终激活预检。`
     if (result.status === 'current') return `当前已是最新版本 ${result.current}。`
     if (result.status === 'blocked') return `版本 ${result.latest || '未知'} 被安全策略阻止，当前版本保持不变。`
+    if (result.status === 'held') return `你已从 ${result.latest} 回滚，自动更新不会重新安装它。`
+    if (result.status === 'unsupported') return `官方最新版 ${result.latest || '未知'} 需要更新的 DSH Desktop 才能使用（新的 Web 登录与接口），当前继续使用 ${result.current}。`
+    if (result.status === 'error' && result.retryAt) return `检查暂时失败（网络或请求限流），将于 ${fmtTime(result.retryAt)} 之后自动重试；当前 Runtime 保持不变。`
     if (result.status === 'error') return '检查失败，当前 Runtime 保持不变。'
     return `检查完成：${result.status || 'done'}`
   },
@@ -131,7 +136,7 @@ $('rollback').addEventListener('click', () => run(
   () => window.runtimeSettings.rollback(),
   (response) => {
     const result = response && response.result ? response.result : {}
-    return result.ok ? `已安排回滚到 ${result.target}，重启后生效。` : (result.reason || '没有可回滚版本。')
+    return result.ok ? `已安排回滚到 ${result.target}，重启后生效；自动更新不会再装回被回滚的版本。` : (result.reason || '没有可回滚版本。')
   },
 ))
 

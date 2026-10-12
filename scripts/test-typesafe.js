@@ -45,11 +45,34 @@ function responseBody() {
 }
 
 function okResponse(body) {
-  return {
-    ok: true,
-    status: 200,
-    text: async () => JSON.stringify(body),
-  }
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+/** A body that keeps producing chunks; counts how much the client pulled. */
+function endlessResponse(counter) {
+  const chunk = new Uint8Array(64 * 1024).fill(0x20)
+  const body = new ReadableStream({
+    pull(controller) {
+      counter.bytes += chunk.length
+      controller.enqueue(chunk)
+    },
+  })
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+/** Headers arrive, then the body never finishes and ignores abort. */
+function stalledResponse() {
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('{"answers":')) },
+    pull() { return new Promise(() => {}) },
+  })
+  return new Response(body, { status: 200, headers: { 'content-type': 'application/json' } })
+}
+
+function withinMs(promise, ms, label) {
+  let timer
+  const guard = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label} did not settle within ${ms}ms`)), ms) })
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer))
 }
 
 async function main() {
@@ -97,7 +120,7 @@ async function main() {
     apiKey: 'test-key',
     fetchImpl: async () => {
       retryCalls += 1
-      if (retryCalls < 3) return { ok: false, status: 429, text: async () => '{"message":"slow down"}' }
+      if (retryCalls < 3) return new Response('{"message":"slow down"}', { status: 429, headers: { 'content-type': 'application/json' } })
       return okResponse(responseBody())
     },
     timeoutMs: 1000,
@@ -109,6 +132,35 @@ async function main() {
     () => typesafe.requestSystemOne(request, { apiKey: ' ', fetchImpl: async () => okResponse(responseBody()) }),
     /未配置 TYPESAFE_API_KEY/,
   )
+
+  // An oversized body is cut off just past the limit, not read to the end,
+  // and not retried.
+  const pulled = { bytes: 0 }
+  let oversizedCalls = 0
+  await assert.rejects(
+    () => withinMs(typesafe.requestSystemOne(request, {
+      apiKey: 'test-key',
+      fetchImpl: async () => { oversizedCalls += 1; return endlessResponse(pulled) },
+    }), 5000, 'oversized TypeSafe body'),
+    /超过大小限制/,
+  )
+  assert.strictEqual(oversizedCalls, 1, 'an oversized response is not retried')
+  assert.ok(pulled.bytes <= typesafe.MAX_RESPONSE_BYTES + 3 * 64 * 1024, `read stopped near the limit, pulled ${pulled.bytes} bytes`)
+
+  // A body that stalls after the headers hits the request deadline instead of
+  // hanging the Creator IPC call; each attempt is bounded.
+  let stalledCalls = 0
+  const started = Date.now()
+  await assert.rejects(
+    () => withinMs(typesafe.requestSystemOne(request, {
+      apiKey: 'test-key',
+      timeoutMs: 1000,
+      fetchImpl: async () => { stalledCalls += 1; return stalledResponse() },
+    }), 10000, 'stalled TypeSafe body'),
+    /TypeSafe 网络请求失败：TypeSafe 请求超时/,
+  )
+  assert.strictEqual(stalledCalls, 3, 'stalled attempts are retried with the normal budget')
+  assert.ok(Date.now() - started < 6000, 'three bounded attempts plus backoff')
   assert.throws(
     () => typesafe.validateResponse({ answers: { priority: { type: 'score' } } }),
     /概率分布缺失/,

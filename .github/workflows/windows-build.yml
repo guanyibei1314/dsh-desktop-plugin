@@ -42,6 +42,9 @@ jobs:
       - name: Security hardening regression tests
         run: npm run test:security-hardening
 
+      - name: Desktop lifecycle and Creator content behavior tests
+        run: npm run test:behavior
+
       - name: DSH runtime updater functional tests
         run: npm run test:runtime-update
 
@@ -55,6 +58,9 @@ jobs:
         run: npm run verify:official-dsh
 
       - name: Fast source runtime download provenance and activation probe
+        env:
+          # Read-only workflow token: keeps publisher checks off the shared anonymous api.github.com limit.
+          DSH_RUNTIME_GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $runtimeRoot = Join-Path $env:RUNNER_TEMP 'dsh-runtime-source-probe'
@@ -161,6 +167,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "installed full toolchain E2E failed with exit code $LASTEXITCODE" }
 
       - name: Verify installed official DSH runtime update chain
+        env:
+          # Read-only workflow token: keeps publisher checks off the shared anonymous api.github.com limit.
+          DSH_RUNTIME_GITHUB_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
           $installer = (Get-Item "dist/DSH-Desktop-Setup-*.exe" | Select-Object -First 1).FullName

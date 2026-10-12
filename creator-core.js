@@ -8,6 +8,15 @@ const STATE_SCHEMA = 1
 const MAX_STATE_ITEMS = 2000
 const MAX_TEXT_BYTES = 2 * 1024 * 1024
 const ALLOWED_EDIT_FILES = new Set(['topic.md', 'script.md'])
+// Content IDs are real folder names, so any Unicode title text is allowed
+// (Chinese titles included). Rejected: path separators, drive/stream colons,
+// wildcard/quote characters, control/format/unpaired-surrogate/line-separator
+// code points (bidi overrides, zero-width tricks), trailing dots or spaces that
+// Windows silently strips, and reserved device names. Containment itself is
+// enforced by resolveContentDir.
+const UNSAFE_ID_CHARACTERS = /[<>:"/\\|?*\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}]/u
+const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[0-9¹²³]|lpt[0-9¹²³])(?:\..*)?$/i
+const MAX_TITLE_CODE_POINTS = 80
 
 function cleanText(value, max = 2000) {
   return typeof value === 'string' ? value.replace(/\0/g, '').trim().slice(0, max) : ''
@@ -25,7 +34,9 @@ function cleanTags(value) {
 
 function safeId(value) {
   const id = cleanText(value, 120)
-  return /^[A-Za-z0-9._-]+$/.test(id) && id !== '.' && id !== '..' ? id : ''
+  if (!id || id === '.' || id === '..' || /[. ]$/.test(id)) return ''
+  if (UNSAFE_ID_CHARACTERS.test(id) || WINDOWS_RESERVED_NAME.test(id)) return ''
+  return id
 }
 
 function newId(prefix = 'item') {
@@ -34,11 +45,13 @@ function newId(prefix = 'item') {
 
 function sanitizeTitle(value) {
   const title = cleanText(value, 120)
-    .replace(/[<>:"/\\|?*\x00-\x1F]/g, ' ')
+    .replace(/[\p{Cf}\p{Cs}]/gu, '')
+    .replace(/[<>:"/\\|?*\p{Cc}\p{Zl}\p{Zp}]/gu, ' ')
     .replace(/\s+/g, ' ')
-    .replace(/[. ]+$/g, '')
-  if (!title) throw new Error('标题不能为空。')
-  return title.slice(0, 80)
+  // Truncate by code point so an emoji is never split into a lone surrogate.
+  const bounded = Array.from(title).slice(0, MAX_TITLE_CODE_POINTS).join('').replace(/[. ]+$/g, '')
+  if (!bounded) throw new Error('标题不能为空。')
+  return bounded
 }
 
 function defaultState() {

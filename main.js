@@ -23,6 +23,9 @@ const net = require('net')
 const { spawn } = require('child_process')
 const { pathToFileURL } = require('url')
 const { readJsonLimited } = require('./secure-fetch')
+const lifecycle = require('./desktop-lifecycle')
+const bootSplash = require('./boot-splash')
+const desktopSettings = require('./desktop-settings')
 
 const ARG_URL = (() => {
   const hit = process.argv.find((a) => a.startsWith('--url='))
@@ -35,17 +38,16 @@ const SMOKE = process.argv.includes('--smoke')
 // 默认模式只信任 Desktop 自己启动并持有进程句柄的随机 loopback Runtime。
 // 复用外部服务必须由用户显式提供 DSH_URL / --url；固定 3080 不再自动信任。
 let dshProc = null
+let dshStarting = null
 let activeUrl = EXPLICIT_HARNESS_URL
 
 const ASSETS = path.join(__dirname, 'assets')
 const PRELOAD = path.join(__dirname, 'preload.js')
 const ERROR_HTML = path.join(__dirname, 'error.html')
 const SEND_DIALOG_HTML = path.join(__dirname, 'send-dialog.html')
-const SPLASH_HTML = path.join(__dirname, 'splash.html')
 const TERMINAL_HTML = path.join(__dirname, 'terminal.html')
 
 let win = null
-let splash = null
 let sendDialog = null
 let termWin = null
 let tray = null
@@ -64,22 +66,13 @@ const MAX_RPC_BYTES = 4 * 1024 * 1024
 const MAX_SSE_BUFFER_BYTES = 1024 * 1024
 
 // ---------------------------------------------------------------- local settings (zero-config: all optional, defaults work out of the box)
-function settingsFile() {
-  return path.join(app.getPath('userData'), 'settings.json')
-}
-
 function loadSettings() {
-  try {
-    return JSON.parse(fs.readFileSync(settingsFile(), 'utf8'))
-  } catch (err) {
-    return {}
-  }
+  return desktopSettings.readSettings()
 }
 
 function saveSettings(patch) {
   try {
-    const next = Object.assign(loadSettings(), patch)
-    fs.writeFileSync(settingsFile(), JSON.stringify(next, null, 2))
+    desktopSettings.updateSettings(patch)
   } catch (err) {
     // settings persistence is best-effort
   }
@@ -175,9 +168,20 @@ function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
-/** 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。 */
-async function startBundledDsh() {
-  if (dshProc !== null && activeUrl) return activeUrl
+/**
+ * 启动打包内置的 DSH web 服务，返回就绪后的实际 URL。
+ * 错误页每 5 秒自动重试；冷启动期间的并发调用必须共享同一次启动，
+ * 否则后一次会顶替 dshProc，两次都失败且前一个子进程成为孤儿。
+ */
+function startBundledDsh() {
+  if (dshProc !== null && activeUrl) return Promise.resolve(activeUrl)
+  if (dshStarting === null) {
+    dshStarting = launchBundledDsh().finally(() => { dshStarting = null })
+  }
+  return dshStarting
+}
+
+async function launchBundledDsh() {
   if (!hasBundledDsh()) throw new Error('内置 DeepSeek Harness 缺失（node_modules/@deepseek-ai/dsh）')
   const port = await pickPort()
   const home = dshHomeDir()
@@ -185,7 +189,8 @@ async function startBundledDsh() {
   const captured = []
   const child = spawn(
     process.execPath,
-    ['--expose-internals', dshBinPath(), 'web', '--host', '127.0.0.1', '--port', String(port)],
+    // --no-open: `dsh web` otherwise hands the URL to the system browser.
+    ['--expose-internals', dshBinPath(), 'web', '--host', '127.0.0.1', '--port', String(port), '--no-open'],
     {
       cwd: home,
       windowsHide: true,
@@ -216,7 +221,9 @@ async function startBundledDsh() {
     }
     await delay(1000)
   }
-  stopBundledDsh()
+  // Only stop the child this launch owns; a child that already exited or was
+  // stopped by quit/relaunch has released dshProc itself.
+  if (dshProc === child) stopBundledDsh()
   throw new Error('内置 DeepSeek Harness 启动超时：' + captured.join('').slice(-2000))
 }
 
@@ -631,8 +638,18 @@ function rebuildMenu() {
 }
 
 // ---------------------------------------------------------------- window
-async function loadMain() {
-  if (!win) return
+let loadingMain = null
+
+/** Load the DSH client; a retry while a load is in flight joins that load. */
+function loadMain() {
+  if (!win) return Promise.resolve()
+  if (loadingMain === null) {
+    loadingMain = loadMainOnce().finally(() => { loadingMain = null })
+  }
+  return loadingMain
+}
+
+async function loadMainOnce() {
   let url = activeUrl || EXPLICIT_HARNESS_URL
   try {
     url = await ensureHarness()
@@ -644,7 +661,8 @@ async function loadMain() {
     loadErrorPage()
     return
   }
-  win.loadURL(url).catch(() => loadErrorPage())
+  if (!win) return
+  await win.loadURL(url).catch(() => loadErrorPage())
 }
 
 function loadErrorPage() {
@@ -661,32 +679,13 @@ function loadErrorPage() {
  * splash decouples perceived startup latency from the plugin count.
  */
 function createSplash() {
-  if (splash !== null && !splash.isDestroyed()) return
-  splash = new BrowserWindow({
-    width: 420,
-    height: 320,
-    frame: false,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    show: true,
-    backgroundColor: '#0d1117',
-    icon: path.join(ASSETS, 'icon.png'),
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  })
-  splash.on('closed', () => { splash = null })
-  splash.loadFile(SPLASH_HTML).catch(() => {})
+  // Reuses the splash bootstrap.js showed before the Runtime preflight.
+  bootSplash.showSplash()
 }
 
 /** Dismiss the startup splash once the real shell has a first frame. */
 function dismissSplash() {
-  if (splash !== null && !splash.isDestroyed()) splash.destroy()
-  splash = null
+  bootSplash.closeSplash()
 }
 
 function showWindow() {
@@ -781,9 +780,25 @@ function createWindow() {
   loadMain()
 }
 
+const BOUNDS_SAVE_DELAY_MS = 500
+let boundsTimer = null
+let pendingBounds = null
+
 function rememberBounds() {
   if (win === null || win.isDestroyed() || win.isMinimized() || win.isMaximized()) return
-  saveSettings({ windowBounds: win.getBounds() })
+  // move/resize fire continuously while dragging; persist once they settle.
+  pendingBounds = win.getBounds()
+  if (boundsTimer !== null) clearTimeout(boundsTimer)
+  boundsTimer = setTimeout(flushBounds, BOUNDS_SAVE_DELAY_MS)
+}
+
+function flushBounds() {
+  if (boundsTimer !== null) clearTimeout(boundsTimer)
+  boundsTimer = null
+  if (pendingBounds === null) return
+  const bounds = pendingBounds
+  pendingBounds = null
+  saveSettings({ windowBounds: bounds })
 }
 
 // ---------------------------------------------------------------- send-message dialog
@@ -983,8 +998,8 @@ ipcMain.on('desktop:retry', (event) => { if (isTrustedSender(event)) loadMain() 
 ipcMain.on('desktop:quit', (event) => { if (isTrustedSender(event)) { quitting = true; app.quit() } })
 
 // ---------------------------------------------------------------- lifecycle
-const gotLock = app.requestSingleInstanceLock()
-if (!gotLock) {
+// bootstrap.js claims the single-instance lock before any boot work.
+if (!app.hasSingleInstanceLock()) {
   app.quit()
 } else {
   app.on('second-instance', () => showWindow())
@@ -1007,8 +1022,10 @@ if (!gotLock) {
   })
 
   app.on('window-all-closed', () => { /* stay alive in tray (Windows) */ })
-  app.on('before-quit', () => {
+  // Runs on before-quit and before a mode-switch/restart relaunch.
+  lifecycle.onShutdown(() => {
     quitting = true
+    flushBounds()
     if (sseTimer) clearTimeout(sseTimer)
     if (menuRebuildTimer) clearTimeout(menuRebuildTimer)
     stopBundledDsh()

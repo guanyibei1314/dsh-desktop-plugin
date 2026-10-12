@@ -15,7 +15,7 @@ const html = read('creator.html')
 const pkg = JSON.parse(read('package.json'))
 
 assert.strictEqual(pkg.version, '0.10.0', 'dual-mode release must be versioned as 0.10.0')
-for (const file of ['desktop-mode.js', 'creator-core.js', 'creator-typesafe.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
+for (const file of ['desktop-mode.js', 'desktop-lifecycle.js', 'boot-splash.js', 'desktop-settings.js', 'creator-core.js', 'creator-typesafe.js', 'creator-main.js', 'creator-preload.js', 'creator.html', 'creator.js', 'creator.css']) {
   assert.ok(pkg.build.files.includes(file), `${file} must be packaged`)
 }
 assert.ok(pkg.scripts['smoke:creator'], 'Creator mode must have an explicit smoke entrypoint')
@@ -27,7 +27,7 @@ assert.ok(bootstrap.includes("require('./main.js')"), 'Standard host must remain
 assert.ok(mode.includes("const MODE_STANDARD = 'standard'"), 'standard mode constant missing')
 assert.ok(mode.includes("const MODE_CREATOR = 'creator'"), 'creator mode constant missing')
 assert.ok(mode.includes("desktopMode: normalized"), 'mode selection must be persisted explicitly')
-assert.ok(mode.includes('app.relaunch'), 'mode switching must rebuild the shell instead of mixing both UIs in one renderer')
+assert.ok(mode.includes('lifecycle.relaunch('), 'mode switching must rebuild the shell (after stopping owned children) instead of mixing both UIs in one renderer')
 assert.ok(mode.includes("label: '标准模式'"), 'standard mode menu item missing')
 assert.ok(mode.includes("label: 'Creator 模式'"), 'Creator mode menu item missing')
 

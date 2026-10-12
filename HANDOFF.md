@@ -226,7 +226,7 @@ v0.10.0 正式发行使用：
 Node.js 24.21.0 LTS x64 MSI
 SHA-256 bb0eaee134f9357f22aea915ee793343e627aefc1e66488164bac6915bce2cac
 
-Git for Windows 2.55.0(5) x64 full installer
+Git for Windows 2.56.0(2) x64 full installer
 SHA-256 d065a4e23c3d9a6b5073d609b5be0830227ec3ca053c083ba385061ddfaf94c6
 ```
 

@@ -1,6 +1,7 @@
 'use strict'
 
 const crypto = require('crypto')
+const { readBytesLimited } = require('./secure-fetch')
 
 const TYPESAFE_ENDPOINT = 'https://api.typesafe.ai/v1/systemone'
 const TYPESAFE_MODEL = 'jev-latest'
@@ -171,11 +172,26 @@ function validateResponse(body) {
   }
 }
 
+/** Read at most MAX_RESPONSE_BYTES, cancelling the stream past the limit. */
 async function responseText(response) {
-  if (!response || typeof response.text !== 'function') throw new Error('TypeSafe 返回缺少正文。')
-  const text = await response.text()
-  if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BYTES) throw new Error('TypeSafe 返回超过大小限制。')
-  return text
+  try {
+    return (await readBytesLimited(response, MAX_RESPONSE_BYTES, 'TypeSafe response')).toString('utf8')
+  } catch (error) {
+    const message = error && error.message ? error.message : ''
+    if (/exceeds size limit/.test(message)) throw Object.assign(new Error('TypeSafe 返回超过大小限制。'), { final: true })
+    if (/not stream-readable/.test(message)) throw Object.assign(new Error('TypeSafe 返回缺少正文。'), { final: true })
+    throw error
+  }
+}
+
+/** Reject when the request deadline passes, even if a body stream ignores abort. */
+function beforeDeadline(promise, signal) {
+  return new Promise((resolve, reject) => {
+    const onAbort = () => reject(new Error('TypeSafe 请求超时。'))
+    if (signal.aborted) return onAbort()
+    signal.addEventListener('abort', onAbort, { once: true })
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
 }
 
 function responseMessage(text) {
@@ -200,6 +216,7 @@ async function requestSystemOne(request, options = {}) {
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), timeoutMs)
     let response
+    let text
     try {
       response = await fetchImpl(TYPESAFE_ENDPOINT, {
         method: 'POST',
@@ -210,7 +227,11 @@ async function requestSystemOne(request, options = {}) {
         body: JSON.stringify(request),
         signal: controller.signal,
       })
+      // The deadline covers the body too: a server that sends headers and then
+      // stalls must not leave the Creator IPC call waiting forever.
+      text = await beforeDeadline(responseText(response), controller.signal)
     } catch (error) {
+      if (error && error.final) throw error
       if (attempt < MAX_ATTEMPTS - 1) {
         await sleep(250 * (2 ** attempt))
         continue
@@ -220,7 +241,6 @@ async function requestSystemOne(request, options = {}) {
       clearTimeout(timer)
     }
 
-    const text = await responseText(response)
     if (RETRYABLE_STATUS.has(response.status) && attempt < MAX_ATTEMPTS - 1) {
       await sleep(250 * (2 ** attempt))
       continue

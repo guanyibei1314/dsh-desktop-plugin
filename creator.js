@@ -1,6 +1,7 @@
 'use strict'
 
 const bridge = window.creatorBridge
+const EditorState = window.CreatorEditorState
 const root = document.getElementById('viewRoot')
 const nav = document.getElementById('nav')
 const viewTitle = document.getElementById('viewTitle')
@@ -33,7 +34,6 @@ let contents = []
 let status = null
 let currentView = 'today'
 let editing = null
-let editingTab = 'topic'
 let formHandler = null
 let toastTimer = null
 let ideaAssessments = new Map()
@@ -110,7 +110,7 @@ async function loadAll(showToast = false) {
     status = nextStatus
     state = nextState
     contents = await bridge.listContents()
-    updateRuntime(status && status.harnessUrl)
+    updateRuntime(status && status.harnessUrl, status && status.harnessState)
     render()
     if (showToast) toast('已刷新 Creator 工作区')
   } catch (error) {
@@ -120,13 +120,20 @@ async function loadAll(showToast = false) {
   }
 }
 
-function updateRuntime(url) {
+function updateRuntime(url, state = url ? 'ready' : 'failed') {
   if (url) {
     runtimeState.className = 'runtime-state ready'
     runtimeState.lastChild.textContent = 'DSH 会话已就绪'
-    conversationFrame.src = url
+    // Re-assigning the same src reloads the conversation; refresh must not.
+    if (conversationFrame.getAttribute('src') !== url) conversationFrame.src = url
     conversationFrame.hidden = false
     aiEmpty.hidden = true
+  } else if (state === 'starting') {
+    // The window opens before the Runtime; keep the startup spinner from creator.html.
+    runtimeState.className = 'runtime-state'
+    runtimeState.lastChild.textContent = 'DSH 会话启动中'
+    conversationFrame.hidden = true
+    aiEmpty.hidden = false
   } else {
     runtimeState.className = 'runtime-state error'
     runtimeState.lastChild.textContent = 'DSH 会话暂不可用'
@@ -707,12 +714,11 @@ function openGoalForm(existing = null) {
 
 async function openEditor(id) {
   try {
-    editing = await bridge.getContent(id)
-    editingTab = 'topic'
+    editing = EditorState.open(await bridge.getContent(id))
     editorTitle.textContent = contentTitle(id)
     editorPath.textContent = editing.path
-    for (const tab of editorDialog.querySelectorAll('[data-editor-tab]')) tab.classList.toggle('active', tab.dataset.editorTab === editingTab)
-    editorText.value = editing.topic
+    for (const tab of editorDialog.querySelectorAll('[data-editor-tab]')) tab.classList.toggle('active', tab.dataset.editorTab === editing.tab)
+    editorText.value = editing.draft[editing.tab]
     editorDialog.showModal()
   } catch (error) {
     toast(error.message, true)
@@ -722,24 +728,42 @@ async function openEditor(id) {
 for (const tab of editorDialog.querySelectorAll('[data-editor-tab]')) {
   tab.addEventListener('click', () => {
     if (!editing) return
-    if (editingTab === 'topic') editing.topic = editorText.value
-    else editing.script = editorText.value
-    editingTab = tab.dataset.editorTab
-    editorText.value = editingTab === 'topic' ? editing.topic : editing.script
+    editorText.value = EditorState.switchTab(editing, editorText.value, tab.dataset.editorTab)
     for (const item of editorDialog.querySelectorAll('[data-editor-tab]')) item.classList.toggle('active', item === tab)
   })
 }
 
 saveContent.addEventListener('click', async () => {
   if (!editing) return
+  saveContent.disabled = true
   try {
-    const field = editingTab
-    editing[field] = editorText.value
-    editing = await bridge.writeContent(editing.id, field, editing[field])
+    // Writes every tab with unsaved edits, not only the visible one.
+    const written = await EditorState.saveDirty(editing, editorText.value, bridge.writeContent)
+    if (!written.length) {
+      toast('没有需要保存的修改')
+      return
+    }
     contents = await bridge.listContents()
-    toast(`${field === 'topic' ? '选题' : '脚本'}已保存`)
+    toast(`${written.map((field) => (field === 'topic' ? '选题' : '脚本')).join('、')}已保存`)
     render()
-  } catch (error) { toast(error.message, true) }
+  } catch (error) {
+    toast(error.message, true)
+  } finally {
+    saveContent.disabled = false
+  }
+})
+
+function confirmDiscardEdits() {
+  if (!editing || !EditorState.dirtyFields(editing, editorText.value).length) return true
+  return window.confirm('选题或脚本有未保存的修改，确定放弃吗？')
+}
+
+for (const close of editorDialog.querySelectorAll('[data-editor-close]')) {
+  close.addEventListener('click', () => { if (confirmDiscardEdits()) editorDialog.close() })
+}
+editorDialog.addEventListener('cancel', (event) => {
+  // Esc: keep the dialog open unless the user confirms discarding edits.
+  if (!confirmDiscardEdits()) event.preventDefault()
 })
 
 openContentFolder.addEventListener('click', () => { if (editing) bridge.openContent(editing.id).catch((e) => toast(e.message, true)) })

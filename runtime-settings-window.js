@@ -4,6 +4,7 @@ const { app, BrowserWindow, Menu, dialog, ipcMain, shell } = require('electron')
 const path = require('path')
 const { pathToFileURL } = require('url')
 const runtimeControl = require('./runtime-control')
+const lifecycle = require('./desktop-lifecycle')
 
 const ASSETS = path.join(__dirname, 'assets')
 const HTML = path.join(__dirname, 'runtime-settings.html')
@@ -99,8 +100,7 @@ function registerIpc() {
   })
   ipcMain.handle('runtime-settings:restart', (event) => {
     assertSender(event)
-    app.relaunch()
-    app.exit(0)
+    lifecycle.relaunch()
     return true
   })
   ipcMain.handle('runtime-settings:open-folder', (event) => {
