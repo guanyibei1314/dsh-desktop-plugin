@@ -73,7 +73,7 @@
           <strong id="editorTitle">内容编辑</strong>
           <span id="editorPath"></span>
         </div>
-        <button value="cancel" class="icon-button">×</button>
+        <button type="button" data-editor-close class="icon-button">×</button>
       </div>
       <div class="editor-tabs">
         <button type="button" class="tab active" data-editor-tab="topic">选题</button>
@@ -83,7 +83,7 @@
       <div class="modal-actions">
         <button type="button" id="openContentFolder" class="ghost">打开文件夹</button>
         <span class="spacer"></span>
-        <button value="cancel" class="secondary">取消</button>
+        <button type="button" data-editor-close class="secondary">取消</button>
         <button type="button" id="saveContent" class="primary">保存</button>
       </div>
     </form>
@@ -108,6 +108,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status"></div>
+  <script src="creator-editor-state.js"></script>
   <script src="creator.js"></script>
 </body>
 </html>
