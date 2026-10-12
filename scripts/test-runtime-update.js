@@ -245,6 +245,30 @@ assert.deepStrictEqual(
   ['@deepseek-ai/dsh-authorization@0.1.7-rc.2 (expected 0.1.1-rc.2)'],
   'an unpinned first-party peer must carry the release version',
 )
+// Platform packages for another os/cpu are never installed here (npm did not
+// ship them either), so only matching platforms count.
+const platformLock = pinnedLock.replace('\nsnapshots:', [
+  "  '@deepseek-ai/node-addon-landlock-run-linux-x64@0.1.1':",
+  '    resolution: {integrity: sha512-EEEE}',
+  '    cpu: [x64]',
+  '    os: [linux]',
+  '',
+  "  '@deepseek-ai/node-addon-not-windows@0.1.1':",
+  '    resolution: {integrity: sha512-FFFF}',
+  "    os: ['!win32']",
+  '',
+  'snapshots:',
+].join('\n'))
+assert.deepStrictEqual(lockedFirstPartyDrift(platformLock, pins, '0.1.1-rc.2', { platform: 'win32', arch: 'x64' }), [])
+assert.deepStrictEqual(
+  lockedFirstPartyDrift(platformLock, pins, '0.1.1-rc.2', { platform: 'linux', arch: 'x64' }),
+  ['@deepseek-ai/node-addon-landlock-run-linux-x64@0.1.1 (expected 0.1.1-rc.2)', '@deepseek-ai/node-addon-not-windows@0.1.1 (expected 0.1.1-rc.2)'],
+  'a package for the current platform must still be pinned or carry the release version',
+)
+assert.deepStrictEqual(
+  lockedFirstPartyDrift(platformLock, pins, '0.1.1-rc.2', { platform: 'linux', arch: 'arm64' }),
+  ['@deepseek-ai/node-addon-not-windows@0.1.1 (expected 0.1.1-rc.2)'],
+)
 assert.deepStrictEqual(lockedFirstPartyDrift('lockfileVersion: 9.0\n', pins, '0.1.1-rc.2'), ['pnpm lock has no packages section'])
 assert.deepStrictEqual(lockedFirstPartyDrift('packages:\n\n  left-pad@1.0.0:\n    x: 1\n', pins, '0.1.1-rc.2'), ['pnpm lock lists no first-party packages'])
 
