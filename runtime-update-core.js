@@ -198,18 +198,35 @@ function firstPartyOverridesYaml(pins) {
   return `overrides:\n${entries.map(([name, version]) => `  ${JSON.stringify(name)}: ${JSON.stringify(version)}`).join('\n')}\n`
 }
 
+/** pnpm os/cpu constraint check (`[linux]`, `['!win32']`); no constraint matches. */
+function lockConstraintMatches(list, value) {
+  if (list === undefined) return true
+  const items = list.split(',').map((item) => item.trim().replace(/^['"]|['"]$/g, '')).filter(Boolean)
+  if (items.includes(`!${value}`)) return false
+  const allowed = items.filter((item) => !item.startsWith('!'))
+  return allowed.length === 0 || allowed.includes(value)
+}
+
 /**
  * First-party packages a pnpm v9 lockfile resolved differently from the pins.
  * A first-party package without a pin (a peer pnpm auto-installs) must belong
- * to the release itself, i.e. carry the release version.
+ * to the release itself, i.e. carry the release version. Platform packages for
+ * another os/cpu (e.g. linux landlock addons on Windows) are never installed
+ * here, so the shipped tree cannot pin them and they are skipped.
  */
-function lockedFirstPartyDrift(lockText, pins, releaseVersion) {
+function lockedFirstPartyDrift(lockText, pins, releaseVersion, target = { platform: process.platform, arch: process.arch }) {
   const afterPackages = String(lockText || '').split(/^packages:[ \t]*$/m)[1]
   if (afterPackages === undefined) return ['pnpm lock has no packages section']
   const packages = afterPackages.split(/^\S/m)[0]
   const drift = []
   let seen = 0
-  for (const [, name, version] of packages.matchAll(/^ {2}'?(@deepseek-ai\/[a-z0-9._-]+)@([^'(:\s]+)'?:/gm)) {
+  for (const entry of packages.split(/\n(?= {2}\S)/)) {
+    const key = entry.match(/^\s*'?(@deepseek-ai\/[a-z0-9._-]+)@([^'(:\s]+)'?:/)
+    if (!key) continue
+    const [, name, version] = key
+    const os = (entry.match(/^ {4}os: \[(.*)\]\s*$/m) || [])[1]
+    const cpu = (entry.match(/^ {4}cpu: \[(.*)\]\s*$/m) || [])[1]
+    if (!lockConstraintMatches(os, target.platform) || !lockConstraintMatches(cpu, target.arch)) continue
     seen += 1
     const pinned = Object.prototype.hasOwnProperty.call(pins, name) ? pins[name] : releaseVersion
     if (version !== pinned) drift.push(`${name}@${version} (expected ${pinned})`)
