@@ -293,7 +293,10 @@ async function withDesktop(options, scenario) {
     if (request === 'child_process') return processes.childProcess
     return originalLoad.apply(this, arguments)
   }
-  globalThis.fetch = processes.fetch
+  // options.fetch(url, init, dshProbeFetch) can answer registry/OSV/etc. itself.
+  globalThis.fetch = options.fetch
+    ? (url, init) => options.fetch(String(url), init, processes.fetch)
+    : processes.fetch
   // The bundled DSH CLI and pnpm are installed on CI but not necessarily in a
   // local checkout; only their presence matters because spawn is faked.
   fs.existsSync = function existsWithBundledRuntime(target) {

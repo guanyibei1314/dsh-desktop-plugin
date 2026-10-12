@@ -153,6 +153,8 @@ function defaultState() {
     lastUpdateAt: null,
     lastError: null,
     blockedVersions: {},
+    // Version the user rolled back from; automatic checks never re-stage it.
+    heldVersion: null,
   }
 }
 
@@ -163,7 +165,7 @@ function loadState() {
   if (!state.blockedVersions || typeof state.blockedVersions !== 'object' || Array.isArray(state.blockedVersions)) {
     state.blockedVersions = {}
   }
-  for (const key of ['activeVersion', 'previousVersion', 'pendingVersion', 'latestVersion']) {
+  for (const key of ['activeVersion', 'previousVersion', 'pendingVersion', 'latestVersion', 'heldVersion']) {
     if (state[key] !== null && !isSafeVersion(state[key])) state[key] = null
   }
   return state
@@ -687,6 +689,17 @@ async function checkAndStageUpdate(options = {}) {
         saveState(state)
         appendLog(`no update: current=${current} latest=${release.version}`)
         return { status: 'current', current, latest: release.version }
+      }
+      if (state.heldVersion && state.heldVersion === release.version && !options.force) {
+        // The user rolled back from exactly this version; only an explicit
+        // manual check (or a newer release) may bring it back.
+        saveState(state)
+        appendLog(`hold: not re-staging ${release.version}, which the user rolled back from`)
+        return { status: 'held', current, latest: release.version }
+      }
+      if (state.heldVersion && (options.force || compareVersions(release.version, state.heldVersion) > 0)) {
+        appendLog(`hold on ${state.heldVersion} released (${options.force ? 'manual check' : `newer official ${release.version}`})`)
+        state.heldVersion = null
       }
       if (!isSupportedRuntimeVersion(release.version)) {
         // Downloading it would only fail the activation probe (401) every day.

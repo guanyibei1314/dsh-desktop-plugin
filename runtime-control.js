@@ -198,6 +198,9 @@ function requestRollback() {
   const state = runtimeManager.loadState()
   const current = runtimeManager.currentRuntimeDescriptor()
   if (state.previousVersion && runtimeManager.validateInstalledVersion(state.previousVersion)) {
+    // Hold the version being rolled back from so the next automatic check does
+    // not stage it again and silently undo the rollback.
+    if (state.activeVersion && state.activeVersion !== state.previousVersion) state.heldVersion = state.activeVersion
     state.pendingVersion = state.previousVersion
     state.lastError = null
     writeRuntimeState(state)
@@ -209,6 +212,7 @@ function requestRollback() {
     state.activeVersion = null
     state.previousVersion = outgoing
     state.pendingVersion = null
+    state.heldVersion = outgoing
     state.lastError = null
     writeRuntimeState(state)
     appendMaintenanceLog(`rollback requested target=bundled@${current.bundledVersion}; activation deferred until restart`)
@@ -245,6 +249,7 @@ function getStatus() {
       lastUpdateAt: state.lastUpdateAt,
       lastError: state.lastError,
       blockedVersions: state.blockedVersions || {},
+      heldVersion: state.heldVersion || null,
     },
     rollbackTarget,
     managedVersions,
