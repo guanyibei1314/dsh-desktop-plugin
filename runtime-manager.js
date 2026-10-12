@@ -46,12 +46,24 @@ const TRANSIENT_RETRY_MIN_MS = 15 * 60 * 1000
 const TRANSIENT_RETRY_DEFAULT_MS = 60 * 60 * 1000
 const TRANSIENT_RETRY_MAX_MS = 6 * 60 * 60 * 1000
 const originalSpawn = childProcess.spawn.bind(childProcess)
+// CI passes its read-only workflow token so shared runners are not throttled by
+// the anonymous api.github.com limit. A dedicated name keeps Desktop from ever
+// picking up a user's own GITHUB_TOKEN. It is sent only to the fixed
+// api.github.com URLs (redirects refused) and is removed from the environment
+// here, before any DSH Runtime, pnpm or npm child can inherit it.
+const GITHUB_API_TOKEN = takeEnv('DSH_RUNTIME_GITHUB_TOKEN')
 
 let spawnPatched = false
 let sessionDshBin = bundledDshBinPath()
 let sessionVersion = bundledDshVersion()
 let updateInFlight = null
 let scheduledTimer = null
+
+function takeEnv(name) {
+  const value = process.env[name] || ''
+  delete process.env[name]
+  return value
+}
 
 function physicalNodeModulePath(...parts) {
   const inAsar = path.join(__dirname, 'node_modules', ...parts)
@@ -523,6 +535,7 @@ async function verifyOfficialGitHubRelease(release) {
     'user-agent': 'DSH-Desktop-Runtime-Updater/0.9.2',
     'x-github-api-version': '2022-11-28',
   }
+  if (GITHUB_API_TOKEN) headers.authorization = `Bearer ${GITHUB_API_TOKEN}`
   const releaseBody = await fetchJson(officialReleaseApiUrl(release.version), { method: 'GET', headers }, 2 * 1024 * 1024)
   const normalizedRelease = normalizeOfficialGitHubRelease(releaseBody, release.version)
   const sourceBody = await fetchJson(officialSourcePackageApiUrl(release.version), { method: 'GET', headers }, 1024 * 1024)

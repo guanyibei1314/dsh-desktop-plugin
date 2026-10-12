@@ -59,9 +59,10 @@ const KEYS = {
 }
 
 /** Registry/OSV/keys succeed; the GitHub release lookup answers with `github`. */
-function services(github, requests) {
-  return async (url) => {
+function services(github, requests, seen = []) {
+  return async (url, init) => {
     requests.push(url)
+    seen.push({ url, headers: Object.assign({}, init && init.headers) })
     if (url === REGISTRY_URL) return json(registry())
     if (url === OSV_URL) return json({})
     if (url === REGISTRY_KEYS_URL) return json(KEYS)
@@ -132,6 +133,28 @@ scenario('A huge Retry-After is clamped; a tiny one waits at least 15 minutes', 
   }
 })
 
+scenario('A CI GitHub token goes only to api.github.com and leaves the inherited environment', async () => {
+  for (const token of ['ci-read-only-token', undefined]) {
+    const requests = []
+    const seen = []
+    const github = () => json({ message: 'API rate limit exceeded' }, 403, { 'x-ratelimit-remaining': '0' })
+    const env = { DSH_RUNTIME_AUTO_UPDATE: '1', DSH_RUNTIME_GITHUB_TOKEN: token }
+    await withDesktop({ env, fetch: services(github, requests, seen) }, async (h) => {
+      const manager = h.require('runtime-manager.js')
+      assert.strictEqual(process.env.DSH_RUNTIME_GITHUB_TOKEN, undefined, 'DSH Runtime, pnpm and npm children must not inherit the token')
+      await manager.checkAndStageUpdate({ silent: true })
+      const githubRequests = seen.filter(({ url }) => new URL(url).origin === 'https://api.github.com')
+      assert.ok(githubRequests.length > 0, 'the publisher check reaches api.github.com')
+      for (const { headers } of githubRequests) {
+        assert.strictEqual(headers.authorization, token ? `Bearer ${token}` : undefined)
+      }
+      for (const { url, headers } of seen.filter((request) => !githubRequests.includes(request))) {
+        assert.ok(!('authorization' in headers), `no credential is sent to ${url}`)
+      }
+    })
+  }
+})
+
 scenario('A real verification failure keeps the daily cadence', () => {
   const requests = []
   const github = () => json({ tag_name: `dsh-v${VERSION}`, draft: false, immutable: false, published_at: '2026-10-01T00:00:00Z', html_url: `https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v${VERSION}` })
@@ -156,7 +179,7 @@ scenario('A real verification failure keeps the daily cadence', () => {
       throw error
     }
   }
-  console.log(`[runtime-retry] ${scenarios.length} behavior scenarios passed: publisher checks before install, bounded transient retry, daily cadence for real failures`)
+  console.log(`[runtime-retry] ${scenarios.length} behavior scenarios passed: publisher checks before install, bounded transient retry, CI token scoped to api.github.com, daily cadence for real failures`)
 })().catch((error) => {
   console.error(error && error.stack ? error.stack : error)
   process.exit(1)
